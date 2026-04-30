@@ -1,12 +1,13 @@
-// Hardware-oriented motion node (minimal): consumes /target_block and publishes a PoseStamped
-// command using the block's real 3D position. Keeps the existing motion_node as a stub/demo.
+// Hardware-oriented motion node (minimal): consumes /target_sequence and publishes PoseStamped
+// commands using the blocks' real 3D positions. Keeps motion_node in src/ as a demo stub.
 
 #include <deque>
 #include <string>
+#include <vector>
 
 #include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/Point.h>
 #include <memory_game/Block.h>
+#include <memory_game/BlockSequence.h>
 #include <ros/ros.h>
 #include <std_msgs/String.h>
 
@@ -26,8 +27,6 @@ class MotionHwNode {
   MotionHwNode() : pnh_("~") {
     pnh_.param("command_pose_topic", command_pose_topic_, std::string("/equilibrium_pose"));
     pnh_.param("pointing_offset_z", pointing_offset_z_, 0.0);
-
-    // These timers are still "open loop" unless you integrate real robot feedback.
     pnh_.param("at_target_sec", at_target_sec_, 2.0);
     pnh_.param("hold_sec", hold_sec_, 1.0);
     pnh_.param("return_home", return_home_, true);
@@ -41,13 +40,12 @@ class MotionHwNode {
     pnh_.param("home_qz", home_pose_.pose.orientation.z, 0.0);
     pnh_.param("home_qw", home_pose_.pose.orientation.w, 1.0);
 
-    // Defaults assume /target_block is in panda_link0.
     home_pose_.header.frame_id = "panda_link0";
     state_ = IDLE;
 
     status_pub_ = nh_.advertise<std_msgs::String>("/motion_status", 10, true);
     cmd_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(command_pose_topic_, 1, true);
-    target_sub_ = nh_.subscribe("/target_block", 10, &MotionHwNode::targetCallback, this);
+    sequence_sub_ = nh_.subscribe("/target_sequence", 10, &MotionHwNode::sequenceCallback, this);
 
     publishStatus("IDLE");
     ROS_INFO("motion_hw_node ready: publishing PoseStamped to %s", command_pose_topic_.c_str());
@@ -56,7 +54,9 @@ class MotionHwNode {
  private:
   void publishStatus(const std::string& state, int block_id = -1) {
     std_msgs::String msg;
-    if (block_id >= 0) {
+    if (active_sequence_id_ >= 0) {
+      msg.data = state + ":" + std::to_string(active_sequence_id_) + ":" + std::to_string(block_id);
+    } else if (block_id >= 0) {
       msg.data = state + ":" + std::to_string(block_id);
     } else {
       msg.data = state;
@@ -64,9 +64,18 @@ class MotionHwNode {
     status_pub_.publish(msg);
   }
 
-  void targetCallback(const memory_game::Block::ConstPtr& msg) {
-    target_queue_.push_back(*msg);
-    ROS_INFO("Queued block %d (pending=%zu)", msg->id, target_queue_.size());
+  void sequenceCallback(const memory_game::BlockSequence::ConstPtr& msg) {
+    if (!msg) {
+      return;
+    }
+
+    target_queue_.clear();
+    active_sequence_id_ = static_cast<int>(msg->sequence_id);
+    for (const auto& block : msg->blocks) {
+      target_queue_.push_back(block);
+    }
+
+    ROS_INFO("Queued sequence %d with %zu blocks", active_sequence_id_, msg->blocks.size());
     if (state_ == IDLE) {
       startNextTarget();
     }
@@ -74,6 +83,9 @@ class MotionHwNode {
 
   void startNextTarget() {
     if (target_queue_.empty()) {
+      state_ = IDLE;
+      publishStatus("IDLE");
+      ROS_INFO("Completed queued targets for sequence %d", active_sequence_id_);
       return;
     }
 
@@ -84,14 +96,11 @@ class MotionHwNode {
     state_ = MOVING_TO_TARGET;
     publishStatus("MOVING_TO_TARGET", last_target_block_id_);
 
-    // Convert target block into a pose command in the same frame.
     geometry_msgs::PoseStamped cmd;
     cmd.header.stamp = ros::Time::now();
     cmd.header.frame_id = !next.header.frame_id.empty() ? next.header.frame_id : "panda_link0";
     cmd.pose.position = next.position;
     cmd.pose.position.z += pointing_offset_z_;
-
-    // Fixed orientation (configurable via home_q* params for now).
     cmd.pose.orientation = home_pose_.pose.orientation;
 
     cmd_pub_.publish(cmd);
@@ -116,13 +125,19 @@ class MotionHwNode {
       return;
     }
 
+    if (!target_queue_.empty()) {
+      startNextTarget();
+      return;
+    }
+
     if (!return_home_) {
-      finishOrNext();
+      state_ = IDLE;
+      publishStatus("IDLE");
       return;
     }
 
     state_ = RETURNING_HOME;
-    publishStatus("RETURNING_HOME", last_target_block_id_);
+    publishStatus("RETURNING_HOME");
 
     home_pose_.header.stamp = ros::Time::now();
     cmd_pub_.publish(home_pose_);
@@ -135,17 +150,8 @@ class MotionHwNode {
     if (state_ != RETURNING_HOME) {
       return;
     }
-    finishOrNext();
-  }
-
-  void finishOrNext() {
-    if (!target_queue_.empty()) {
-      startNextTarget();
-      return;
-    }
     state_ = IDLE;
     publishStatus("IDLE");
-    ROS_INFO("Completed queued targets (last=%d)", last_target_block_id_);
   }
 
   ros::NodeHandle nh_;
@@ -153,11 +159,12 @@ class MotionHwNode {
 
   ros::Publisher status_pub_;
   ros::Publisher cmd_pub_;
-  ros::Subscriber target_sub_;
+  ros::Subscriber sequence_sub_;
 
   std::deque<memory_game::Block> target_queue_;
   MotionState state_;
   int last_target_block_id_ = -1;
+  int active_sequence_id_ = -1;
 
   std::string command_pose_topic_;
   double pointing_offset_z_ = 0.0;
@@ -179,4 +186,3 @@ int main(int argc, char** argv) {
   ros::spin();
   return 0;
 }
-

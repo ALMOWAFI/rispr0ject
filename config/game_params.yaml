@@ -7,9 +7,6 @@ game_node:
   start_delay_sec: 0.8
   player_timeout_sec: 30.0
   no_immediate_repeat: true
-  
-  show_hold_sec: 1.0
-  between_show_sec: 0.3
   round_pause_sec: 1.0
 
   disable_red: true
@@ -17,6 +14,7 @@ game_node:
   min_detected_blocks_required: 3
   blocks_wait_sec: 0.5
   block_freshness_sec: 0.20
+  motion_timeout_padding_sec: 2.0
   
   target_frame: "panda_link0"
   target_subscriber_poll_sec: 0.2
@@ -98,7 +96,15 @@ motion_moveit_node:
   planning_group: "panda_arm"
   pose_frame: "panda_link0"
   require_pose_frame_match: true
-  target_hold_sec: 1.0
+  cartesian_eef_step: 0.01
+  cartesian_fraction_min: 0.90
+  travel_z: 0.35
+  tool_offset_z: 0.05
+  approach_margin: 0.10
+  point_dwell_sec: 0.5
+  return_home: true
+  use_current_state_as_home: true
+  keep_current_orientation: true
   
   workspace_enable: false
   workspace_min_x: -10.0

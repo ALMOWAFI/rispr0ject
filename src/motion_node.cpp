@@ -1,6 +1,7 @@
 #include <ros/ros.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <memory_game/Block.h>
+#include <memory_game/BlockSequence.h>
 #include <std_msgs/String.h>
 #include <geometry_msgs/Point.h>
 #include <cmath>
@@ -158,13 +159,29 @@ void moveTowards(const geometry_msgs::Point& goal)
 
 
 // ---------------- TARGET CALLBACK ----------------
-void targetCallback(const memory_game::Block::ConstPtr& msg)
+void enqueueTarget(const memory_game::Block& block)
 {
-    target_queue.push_back(*msg);
-    ROS_INFO("Queued block %d (pending=%zu)", msg->id, target_queue.size());
+    target_queue.push_back(block);
+    ROS_INFO("Queued block %d (pending=%zu)", block.id, target_queue.size());
 
     if (current_state == IDLE) {
         startNextTarget();
+    }
+}
+
+void targetCallback(const memory_game::Block::ConstPtr& msg)
+{
+    enqueueTarget(*msg);
+}
+
+void sequenceCallback(const memory_game::BlockSequence::ConstPtr& msg)
+{
+    if (!msg) {
+        return;
+    }
+
+    for (const auto& block : msg->blocks) {
+        enqueueTarget(block);
     }
 }
 
@@ -182,6 +199,7 @@ int main(int argc, char** argv)
     status_pub = nh.advertise<std_msgs::String>("/motion_status", 10);
 
     ros::Subscriber sub = nh.subscribe("/target_block", 10, targetCallback);
+    ros::Subscriber seq_sub = nh.subscribe("/target_sequence", 10, sequenceCallback);
 
     // Home position
     home_pos.x = 0.3;

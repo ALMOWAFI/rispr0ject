@@ -1,13 +1,16 @@
-// This is the hardware-ready alternative to src/motion_node.cpp (which is a demo/marker node).
+// MoveIt-backed motion executor for the memory game.
 //
-// Requires MoveIt to be running on the robot PC (/move_group available).
+// Owns full sequence execution: receives /target_sequence, runs hover -> dip -> hover
+// for each block, optionally returns home after the batch, and reports progress on
+// /motion_status including the sequence id.
 
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <memory>
-#include <sstream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -15,24 +18,29 @@
 #include <Eigen/Geometry>
 #include <geometry_msgs/Pose.h>
 #include <memory_game/Block.h>
-#include <ros/ros.h>
-#include <std_msgs/String.h>
-
+#include <memory_game/BlockSequence.h>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/robot_state/robot_state.h>
+#include <moveit_msgs/RobotTrajectory.h>
+#include <ros/ros.h>
+#include <std_msgs/String.h>
 
 namespace {
 
-void PublishStatus(ros::Publisher& pub, const std::string& s, int block_id = -1) {
+void PublishStatus(ros::Publisher& pub,
+                   const std::string& state,
+                   int sequence_id = -1,
+                   int block_id = -1) {
   std_msgs::String msg;
-  if (block_id >= 0) {
-    std::ostringstream oss;
-    oss << s << ":" << block_id;
-    msg.data = oss.str();
-  } else {
-    msg.data = s;
+  std::ostringstream oss;
+  oss << state;
+  if (sequence_id >= 0) {
+    oss << ":" << sequence_id << ":" << block_id;
+  } else if (block_id >= 0) {
+    oss << ":" << block_id;
   }
+  msg.data = oss.str();
   pub.publish(msg);
 }
 
@@ -48,7 +56,13 @@ class MotionMoveItNode {
     pnh_.param("max_velocity_scaling", max_velocity_scaling_, 0.10);
     pnh_.param("max_acceleration_scaling", max_acceleration_scaling_, 0.10);
 
-    pnh_.param("pointing_offset_z", pointing_offset_z_, 0.10);
+    pnh_.param("cartesian_eef_step", cartesian_eef_step_, 0.01);
+    pnh_.param("cartesian_fraction_min", cartesian_fraction_min_, 0.90);
+    pnh_.param("travel_z", travel_z_, 0.35);
+    pnh_.param("tool_offset_z", tool_offset_z_, 0.05);
+    pnh_.param("approach_margin", approach_margin_, 0.10);
+    pnh_.param("point_dwell_sec", point_dwell_sec_, 0.5);
+
     pnh_.param("return_home", return_home_, true);
     pnh_.param("use_current_state_as_home", use_current_state_as_home_, true);
     pnh_.param("require_pose_frame_match", require_pose_frame_match_, true);
@@ -59,9 +73,6 @@ class MotionMoveItNode {
     pnh_.param("workspace_max_y", workspace_max_y_, 10.0);
     pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
     pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
-
-    // If true, we keep the current end-effector orientation and only change XYZ.
-    // This is usually the least surprising behavior for a lab setup.
     pnh_.param("keep_current_orientation", keep_current_orientation_, true);
 
     status_pub_ = nh_.advertise<std_msgs::String>("/motion_status", 10, true);
@@ -70,7 +81,6 @@ class MotionMoveItNode {
 
     PublishStatus(status_pub_, "INIT");
 
-    // MoveIt interface (must have /robot_description + /move_group alive).
     move_group_ = std::make_unique<moveit::planning_interface::MoveGroupInterface>(planning_group_);
     move_group_->setPlanningTime(planning_time_);
     move_group_->setMaxVelocityScalingFactor(max_velocity_scaling_);
@@ -80,8 +90,8 @@ class MotionMoveItNode {
     configureHomeTarget();
     cacheReferencePose();
 
-    worker_thread_ = std::thread([this]() { this->workerLoop(); });
-    target_sub_ = nh_.subscribe("/target_block", 20, &MotionMoveItNode::targetCb, this);
+    worker_thread_ = std::thread([this]() { workerLoop(); });
+    sequence_sub_ = nh_.subscribe("/target_sequence", 10, &MotionMoveItNode::sequenceCb, this);
 
     PublishStatus(status_pub_, "IDLE");
 
@@ -94,7 +104,7 @@ class MotionMoveItNode {
     {
       std::lock_guard<std::mutex> lk(mu_);
       shutting_down_ = true;
-      queue_.clear();
+      pending_sequences_.clear();
     }
     queue_cv_.notify_all();
     if (worker_thread_.joinable()) {
@@ -103,78 +113,151 @@ class MotionMoveItNode {
   }
 
  private:
-  void targetCb(const memory_game::Block::ConstPtr& msg) {
+  struct SequenceJob {
+    uint32_t sequence_id = 0;
+    std::vector<memory_game::Block> blocks;
+  };
+
+  void sequenceCb(const memory_game::BlockSequence::ConstPtr& msg) {
     if (!msg) {
       return;
     }
 
-    size_t queue_size = 0;
+    SequenceJob job;
+    job.sequence_id = msg->sequence_id;
+    job.blocks.assign(msg->blocks.begin(), msg->blocks.end());
+
     {
       std::lock_guard<std::mutex> lk(mu_);
       if (shutting_down_) {
         return;
       }
-      queue_.push_back(*msg);
-      queue_size = queue_.size();
+      pending_sequences_.push_back(job);
     }
 
-    ROS_INFO("Queued target block %d (queue=%zu)", msg->id, queue_size);
+    ROS_INFO("Queued sequence %u with %zu targets", job.sequence_id, job.blocks.size());
     queue_cv_.notify_one();
   }
 
   void workerLoop() {
     while (true) {
-      memory_game::Block next;
+      SequenceJob job;
       {
         std::unique_lock<std::mutex> lk(mu_);
-        queue_cv_.wait(lk, [this]() { return shutting_down_ || !queue_.empty(); });
+        queue_cv_.wait(lk, [this]() { return shutting_down_ || !pending_sequences_.empty(); });
         if (shutting_down_) {
           return;
         }
-        next = queue_.front();
-        queue_.pop_front();
+        job = pending_sequences_.front();
+        pending_sequences_.pop_front();
       }
 
-      PublishStatus(status_pub_, "MOVING_TO_TARGET", next.id);
-      if (!executeTarget(next)) {
-        failAndStopQueue("Target execution failed", next.id);
+      if (!executeSequence(job)) {
         continue;
       }
 
-      PublishStatus(status_pub_, "AT_TARGET", next.id);
-
-      if (target_hold_sec_ > 0.0) {
-        ROS_INFO("Holding at target %d for %.1fs", next.id, target_hold_sec_);
-        ros::Duration(target_hold_sec_).sleep();
-      }
-
-      if (return_home_) {
-        PublishStatus(status_pub_, "RETURNING_HOME", next.id);
-        if (!returnHome()) {
-          failAndStopQueue("Return-home motion failed", next.id);
-          continue;
-        }
-      }
-
-      bool queue_empty = false;
-      {
-        std::lock_guard<std::mutex> lk(mu_);
-        queue_empty = queue_.empty();
-      }
-      if (queue_empty) {
-        PublishStatus(status_pub_, "IDLE");
-      }
+      PublishStatus(status_pub_, "IDLE", static_cast<int>(job.sequence_id));
     }
   }
 
-  void failAndStopQueue(const std::string& reason, int block_id = -1) {
+  void failAndStopQueue(const std::string& reason, uint32_t sequence_id, int block_id = -1) {
     {
       std::lock_guard<std::mutex> lk(mu_);
-      queue_.clear();
+      pending_sequences_.clear();
     }
     ROS_ERROR("%s", reason.c_str());
-    PublishStatus(status_pub_, "MOVE_FAILED", block_id);
-    PublishStatus(status_pub_, "IDLE");
+    PublishStatus(status_pub_, "MOVE_FAILED", static_cast<int>(sequence_id), block_id);
+    PublishStatus(status_pub_, "IDLE", static_cast<int>(sequence_id));
+  }
+
+  bool executeSequence(const SequenceJob& job) {
+    if (job.blocks.empty()) {
+      ROS_WARN("Sequence %u is empty", job.sequence_id);
+      return true;
+    }
+
+    for (const auto& block : job.blocks) {
+      if (!executeTarget(job.sequence_id, block)) {
+        return false;
+      }
+    }
+
+    if (!return_home_) {
+      return true;
+    }
+
+    PublishStatus(status_pub_, "RETURNING_HOME", static_cast<int>(job.sequence_id));
+    if (!returnHome()) {
+      failAndStopQueue("Return-home motion failed", job.sequence_id);
+      return false;
+    }
+
+    return true;
+  }
+
+  bool executeTarget(uint32_t sequence_id, const memory_game::Block& block) {
+    if (!move_group_) {
+      failAndStopQueue("MoveGroupInterface not initialized", sequence_id, block.id);
+      return false;
+    }
+
+    const std::string frame = !block.header.frame_id.empty() ? block.header.frame_id : pose_frame_;
+    if (!validateTarget(block, frame)) {
+      failAndStopQueue("Target validation failed", sequence_id, block.id);
+      return false;
+    }
+
+    move_group_->setPoseReferenceFrame(frame);
+
+    const geometry_msgs::Pose hover_pose = buildHoverPose(block);
+    const geometry_msgs::Pose point_pose = buildPointPose(block);
+
+    if (workspace_enable_ &&
+        (!withinWorkspace(hover_pose.position) || !withinWorkspace(point_pose.position))) {
+      ROS_ERROR("Rejecting block %d in sequence %u: hover/point pose outside workspace",
+                block.id, sequence_id);
+      failAndStopQueue("Target pose outside workspace", sequence_id, block.id);
+      return false;
+    }
+
+    PublishStatus(status_pub_, "MOVING_TO_TARGET", static_cast<int>(sequence_id), block.id);
+    if (!jointMove(hover_pose, block.id)) {
+      failAndStopQueue("Hover move failed", sequence_id, block.id);
+      return false;
+    }
+
+    PublishStatus(status_pub_, "POINTING", static_cast<int>(sequence_id), block.id);
+    if (!cartesianDip(hover_pose, point_pose, block.id)) {
+      failAndStopQueue("Cartesian dip failed", sequence_id, block.id);
+      return false;
+    }
+
+    PublishStatus(status_pub_, "AT_TARGET", static_cast<int>(sequence_id), block.id);
+    return true;
+  }
+
+  bool validateTarget(const memory_game::Block& block, const std::string& frame) const {
+    if (!std::isfinite(block.position.x) ||
+        !std::isfinite(block.position.y) ||
+        !std::isfinite(block.position.z)) {
+      ROS_ERROR("Rejecting block %d: non-finite target position [%.3f, %.3f, %.3f]",
+                block.id, block.position.x, block.position.y, block.position.z);
+      return false;
+    }
+
+    if (require_pose_frame_match_ && frame != pose_frame_) {
+      ROS_ERROR("Rejecting block %d: expected frame %s but got %s",
+                block.id, pose_frame_.c_str(), frame.c_str());
+      return false;
+    }
+
+    if (workspace_enable_ && frame != pose_frame_) {
+      ROS_ERROR("Rejecting block %d: workspace checks require pose frame %s but target is in %s",
+                block.id, pose_frame_.c_str(), frame.c_str());
+      return false;
+    }
+
+    return true;
   }
 
   bool withinWorkspace(const geometry_msgs::Point& p) const {
@@ -183,52 +266,30 @@ class MotionMoveItNode {
            p.z >= workspace_min_z_ && p.z <= workspace_max_z_;
   }
 
-  bool executeTarget(const memory_game::Block& b) {
-    if (!move_group_) {
-      ROS_ERROR("MoveGroupInterface not initialized");
-      return false;
-    }
+  geometry_msgs::Pose buildHoverPose(const memory_game::Block& block) {
+    geometry_msgs::Pose pose = orientationReferencePose();
+    pose.position.x = block.position.x;
+    pose.position.y = block.position.y;
+    pose.position.z = std::max(travel_z_, block.position.z + approach_margin_);
+    return pose;
+  }
 
-    if (!std::isfinite(b.position.x) || !std::isfinite(b.position.y) || !std::isfinite(b.position.z)) {
-      ROS_ERROR("Rejecting block %d: non-finite target position [%.3f, %.3f, %.3f]",
-                b.id, b.position.x, b.position.y, b.position.z);
-      return false;
-    }
+  geometry_msgs::Pose buildPointPose(const memory_game::Block& block) {
+    geometry_msgs::Pose pose = orientationReferencePose();
+    pose.position.x = block.position.x;
+    pose.position.y = block.position.y;
+    pose.position.z = block.position.z + tool_offset_z_;
+    return pose;
+  }
 
-    const std::string frame = !b.header.frame_id.empty() ? b.header.frame_id : pose_frame_;
-    if (require_pose_frame_match_ && frame != pose_frame_) {
-      ROS_ERROR("Rejecting block %d: expected frame %s but got %s",
-                b.id, pose_frame_.c_str(), frame.c_str());
-      return false;
-    }
-
-    if (workspace_enable_ && frame != pose_frame_) {
-      ROS_ERROR("Rejecting block %d: workspace checks require pose frame %s but target is in %s",
-                b.id, pose_frame_.c_str(), frame.c_str());
-      return false;
-    }
-
-    move_group_->setPoseReferenceFrame(frame);
-
-    geometry_msgs::Pose target_pose;
+  geometry_msgs::Pose orientationReferencePose() {
     if (keep_current_orientation_) {
-      target_pose = move_group_->getCurrentPose().pose;
-    } else {
-      target_pose = reference_pose_;
+      return move_group_->getCurrentPose().pose;
     }
+    return reference_pose_;
+  }
 
-    target_pose.position = b.position;
-    target_pose.position.z += pointing_offset_z_;
-
-    if (workspace_enable_ && !withinWorkspace(target_pose.position)) {
-      ROS_ERROR("Rejecting block %d: target pose [%.3f, %.3f, %.3f] is outside motion workspace",
-                b.id,
-                target_pose.position.x,
-                target_pose.position.y,
-                target_pose.position.z);
-      return false;
-    }
-
+  bool jointMove(const geometry_msgs::Pose& target_pose, int block_id) {
     move_group_->setPoseTarget(target_pose);
 
     moveit::planning_interface::MoveGroupInterface::Plan plan;
@@ -236,7 +297,7 @@ class MotionMoveItNode {
         (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
     if (!planned) {
-      ROS_WARN("Planning failed for block %d", b.id);
+      ROS_WARN("Planning hover pose failed for block %d", block_id);
       move_group_->clearPoseTargets();
       return false;
     }
@@ -248,11 +309,53 @@ class MotionMoveItNode {
     move_group_->clearPoseTargets();
 
     if (!executed) {
-      ROS_WARN("Execution failed for block %d", b.id);
+      ROS_WARN("Executing hover pose failed for block %d", block_id);
       return false;
     }
 
-    ROS_INFO("Reached block %d", b.id);
+    return true;
+  }
+
+  bool cartesianDip(const geometry_msgs::Pose& hover_pose,
+                    const geometry_msgs::Pose& point_pose,
+                    int block_id) {
+    if (!executeCartesianSegment({point_pose}, block_id, "descent")) {
+      return false;
+    }
+
+    if (point_dwell_sec_ > 0.0) {
+      ros::Duration(point_dwell_sec_).sleep();
+    }
+
+    return executeCartesianSegment({hover_pose}, block_id, "ascent");
+  }
+
+  bool executeCartesianSegment(const std::vector<geometry_msgs::Pose>& waypoints,
+                               int block_id,
+                               const std::string& segment_name) {
+    moveit_msgs::RobotTrajectory trajectory;
+    const double fraction = move_group_->computeCartesianPath(
+        waypoints, cartesian_eef_step_, 0.0, trajectory);
+
+    if (fraction < cartesian_fraction_min_) {
+      ROS_WARN("Cartesian %s fraction %.2f below minimum %.2f for block %d",
+               segment_name.c_str(), fraction, cartesian_fraction_min_, block_id);
+      return false;
+    }
+
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    plan.trajectory_ = trajectory;
+
+    const bool executed =
+        (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+    move_group_->stop();
+    if (!executed) {
+      ROS_WARN("Executing Cartesian %s failed for block %d",
+               segment_name.c_str(), block_id);
+      return false;
+    }
+
     return true;
   }
 
@@ -261,7 +364,11 @@ class MotionMoveItNode {
       return false;
     }
 
-    // Go back to the configured or captured home joint configuration.
+    if (home_joint_values_.empty()) {
+      ROS_WARN("Return-home requested but no home joint target is available");
+      return false;
+    }
+
     move_group_->setJointValueTarget(home_joint_values_);
 
     moveit::planning_interface::MoveGroupInterface::Plan plan;
@@ -277,7 +384,6 @@ class MotionMoveItNode {
         (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
     move_group_->stop();
-
     return executed;
   }
 
@@ -359,16 +465,25 @@ class MotionMoveItNode {
   ros::NodeHandle pnh_;
 
   ros::Publisher status_pub_;
-  ros::Subscriber target_sub_;
+  ros::Subscriber sequence_sub_;
 
   ros::AsyncSpinner spinner_;
+
+  std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
+  std::vector<double> home_joint_values_;
+  geometry_msgs::Pose reference_pose_;
 
   std::string planning_group_;
   std::string pose_frame_;
   double planning_time_ = 5.0;
   double max_velocity_scaling_ = 0.10;
   double max_acceleration_scaling_ = 0.10;
-  double pointing_offset_z_ = 0.10;
+  double cartesian_eef_step_ = 0.01;
+  double cartesian_fraction_min_ = 0.90;
+  double travel_z_ = 0.35;
+  double tool_offset_z_ = 0.05;
+  double approach_margin_ = 0.10;
+  double point_dwell_sec_ = 0.5;
   bool return_home_ = true;
   bool use_current_state_as_home_ = true;
   bool require_pose_frame_match_ = true;
@@ -380,15 +495,10 @@ class MotionMoveItNode {
   double workspace_min_z_ = -10.0;
   double workspace_max_z_ = 10.0;
   bool keep_current_orientation_ = true;
-  double target_hold_sec_ = 1.0;
-
-  std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
-  std::vector<double> home_joint_values_;
-  geometry_msgs::Pose reference_pose_;
 
   std::mutex mu_;
   std::condition_variable queue_cv_;
-  std::deque<memory_game::Block> queue_;
+  std::deque<SequenceJob> pending_sequences_;
   std::thread worker_thread_;
   bool shutting_down_ = false;
 };

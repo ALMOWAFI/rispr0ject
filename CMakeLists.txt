@@ -32,6 +32,7 @@ add_message_files(
   FILES
   Block.msg
   BlockArray.msg
+  BlockSequence.msg
   PlayerSelection.msg
 )
 
