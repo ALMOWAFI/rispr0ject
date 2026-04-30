@@ -83,6 +83,7 @@ private:
     double block_freshness_sec_;
     double target_subscriber_poll_sec_;
     double target_subscriber_timeout_sec_;
+    double motion_timeout_per_target_sec_;
     double motion_timeout_padding_sec_;
 
     geometry_msgs::Point default_target_;
@@ -152,6 +153,7 @@ private:
         pnh_.param("block_freshness_sec", block_freshness_sec_, 0.20);
         pnh_.param("target_subscriber_poll_sec", target_subscriber_poll_sec_, 0.2);
         pnh_.param("target_subscriber_timeout_sec", target_subscriber_timeout_sec_, 5.0);
+        pnh_.param("motion_timeout_per_target_sec", motion_timeout_per_target_sec_, 15.0);
         pnh_.param("motion_timeout_padding_sec", motion_timeout_padding_sec_, 2.0);
 
         pnh_.param("default_x", default_target_.x, 0.40);
@@ -175,6 +177,7 @@ private:
         min_detected_blocks_required_ = std::max(1, min_detected_blocks_required_);
         target_subscriber_poll_sec_ = std::max(0.05, target_subscriber_poll_sec_);
         target_subscriber_timeout_sec_ = std::max(0.0, target_subscriber_timeout_sec_);
+        motion_timeout_per_target_sec_ = std::max(1.0, motion_timeout_per_target_sec_);
         motion_timeout_padding_sec_ = std::max(0.0, motion_timeout_padding_sec_);
 
         available_block_ids_.clear();
@@ -592,7 +595,7 @@ private:
             ROS_WARN("No /motion_status received yet. Is motion node running?");
         }
 
-        const double per_target_budget_sec = 4.0;
+        const double per_target_budget_sec = motion_timeout_per_target_sec_;
         const double timeout_sec =
             std::max(5.0, per_target_budget_sec * static_cast<double>(sequence_.size()) + motion_timeout_padding_sec_);
         show_failsafe_timer_ = nh_.createTimer(

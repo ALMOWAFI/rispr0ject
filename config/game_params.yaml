@@ -14,6 +14,7 @@ game_node:
   min_detected_blocks_required: 3
   blocks_wait_sec: 0.5
   block_freshness_sec: 0.20
+  motion_timeout_per_target_sec: 15.0
   motion_timeout_padding_sec: 2.0
   
   target_frame: "panda_link0"
