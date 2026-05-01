@@ -129,7 +129,7 @@ void loadParams() {
     pnh_.param("max_candidate_jump_px", max_candidate_jump_px_, 120.0);
     pnh_.param("position_reset_timeout_sec", position_reset_timeout_sec_, 0.5);
     pnh_.param("max_position_jump_m", max_position_jump_m_, 0.10);
-    pnh_.param("base_exclusion_radius_m", base_exclusion_radius_m_, 0.0);
+    pnh_.param("base_exclusion_radius_m", base_exclusion_radius_m_, 0.15);
 
     if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
     if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
