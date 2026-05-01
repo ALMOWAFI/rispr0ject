@@ -20,8 +20,28 @@ PROJECT_ROOT = UI_ROOT.parent
 RUNTIME_DIR = UI_ROOT / "runtime"
 
 
+def find_ros_setup() -> Optional[str]:
+    # Prefer the distro reported by the current environment.
+    distro = os.environ.get("ROS_DISTRO")
+    candidates = []
+    if distro:
+        candidates.append(f"/opt/ros/{distro}/setup.bash")
+    candidates += [
+        "/opt/ros/noetic/setup.bash",
+        "/opt/ros/melodic/setup.bash",
+        "/opt/ros/humble/setup.bash",
+    ]
+    for path in candidates:
+        if Path(path).exists():
+            return path
+    return None
+
+
 def build_shell_prefix() -> str:
-    parts = ["source /opt/ros/noetic/setup.bash"]
+    parts = []
+    ros_setup = find_ros_setup()
+    if ros_setup:
+        parts.append(f"source {shlex.quote(ros_setup)}")
     catkin_setup = Path.home() / "catkin_ws" / "devel" / "setup.bash"
     if catkin_setup.exists():
         parts.append(f"source {shlex.quote(str(catkin_setup))}")
