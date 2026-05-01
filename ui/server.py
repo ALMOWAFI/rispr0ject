@@ -65,7 +65,7 @@ START_COMMANDS = OrderedDict({
     "motion": [
         "bash",
         "-lc",
-        "rosparam load config/game_params.yaml && rosrun memory_game motion_moveit_node __name:=motion_moveit_node",
+        "rosparam load config/game_params.yaml && rosrun memory_game motion_moveit_node __name:=motion_moveit_node _planning_group:=arm",
     ],
 })
 
