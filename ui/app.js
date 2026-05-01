@@ -3,6 +3,7 @@ const blockCountValue = document.getElementById('block-count-value');
 const stateValue = document.getElementById('state-value');
 const motionValue = document.getElementById('motion-value');
 const selectionValue = document.getElementById('selection-value');
+const selectionPlayerValue = document.getElementById('selection-player-value');
 const statusRibbon = document.getElementById('status-ribbon');
 const previewMessage = document.getElementById('preview-message');
 const bridgeStatus = document.getElementById('bridge-status');
@@ -10,6 +11,15 @@ const bridgeMessage = document.getElementById('bridge-message');
 const blockList = document.getElementById('block-list');
 const processList = document.getElementById('process-list');
 const logList = document.getElementById('log-list');
+const playerStage = document.getElementById('player-stage');
+const playerPhase = document.getElementById('player-phase');
+const playerHeadline = document.getElementById('player-headline');
+const playerDetail = document.getElementById('player-detail');
+const stepProgress = document.getElementById('step-progress');
+const playAgainWrap = document.getElementById('play-again-wrap');
+const observerPanel = document.getElementById('observer-panel');
+const observerToggle = document.getElementById('observer-toggle');
+const observerClose = document.getElementById('observer-close');
 
 async function postJson(url) {
   const response = await fetch(url, {
@@ -24,6 +34,27 @@ async function postJson(url) {
   return data;
 }
 
+function setObserverOpen(open) {
+  document.body.classList.toggle('observer-open', open);
+  observerPanel.setAttribute('aria-hidden', String(!open));
+  observerToggle.setAttribute('aria-expanded', String(open));
+}
+
+function setObserverHandlers() {
+  observerToggle.addEventListener('click', () => {
+    const shouldOpen = observerPanel.getAttribute('aria-hidden') === 'true';
+    setObserverOpen(shouldOpen);
+  });
+
+  observerClose.addEventListener('click', () => setObserverOpen(false));
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      setObserverOpen(false);
+    }
+  });
+}
+
 function setButtonHandlers() {
   document.getElementById('start-btn').addEventListener('click', async () => {
     try {
@@ -35,17 +66,22 @@ function setButtonHandlers() {
     }
   });
 
-  document.getElementById('next-btn').addEventListener('click', () => {
-    previewMessage.textContent = 'Next Round is still not wired. Keep round control inside ROS for now.';
-  });
-
   document.getElementById('end-btn').addEventListener('click', async () => {
     try {
       const result = await postJson('/api/stop');
       previewMessage.textContent = result.message;
       pollStatus();
     } catch (error) {
-      previewMessage.textContent = `End Game failed: ${error.message}`;
+      previewMessage.textContent = `Stop failed: ${error.message}`;
+    }
+  });
+
+  document.getElementById('play-again-btn').addEventListener('click', async () => {
+    try {
+      await postJson('/api/restart_game');
+      pollStatus();
+    } catch (error) {
+      console.error('Restart failed:', error.message);
     }
   });
 }
@@ -78,7 +114,8 @@ function renderProcesses(processStatus) {
 
   entries.forEach(([name, info]) => {
     const item = document.createElement('li');
-    item.innerHTML = `<strong>${name}</strong> · ${info.running ? 'running' : 'stopped'}${info.pid ? ` · pid ${info.pid}` : ''}`;
+    const label = info.label || name;
+    item.innerHTML = `<strong>${label}</strong> · ${info.running ? 'running' : 'stopped'}${info.pid ? ` · pid ${info.pid}` : ''}`;
     processList.appendChild(item);
   });
 }
@@ -99,6 +136,51 @@ function renderLog(entries) {
   });
 }
 
+function renderPlayerMessage(data) {
+  const message = data.player_message || {
+    phase: 'Connecting',
+    headline: 'Connecting to the game',
+    detail: 'Waiting for live ROS data from the robot system.',
+    tone: 'neutral'
+  };
+
+  playerPhase.textContent = message.phase;
+  playerHeadline.textContent = message.headline;
+  playerDetail.textContent = message.detail;
+  playerStage.dataset.tone = message.tone || 'neutral';
+}
+
+function renderSelection(selection) {
+  if (selection) {
+    const summary = `${selection.color} · id ${selection.block_id} · ${selection.selection_type} · conf ${selection.confidence}`;
+    selectionValue.textContent = summary;
+    selectionPlayerValue.textContent = `${selection.color} · id ${selection.block_id}`;
+  } else {
+    selectionValue.textContent = 'None';
+    selectionPlayerValue.textContent = 'None';
+  }
+}
+
+function renderProgress(gameState, progress) {
+  const isPlayerTurn = gameState === 'WAITING_PLAYER';
+  const parts = progress ? progress.split('/') : [];
+  const valid = parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1]);
+
+  if (isPlayerTurn && valid) {
+    const current = parseInt(parts[0], 10);
+    const total = parseInt(parts[1], 10);
+    stepProgress.textContent = `Step ${current} of ${total}`;
+    stepProgress.hidden = false;
+  } else {
+    stepProgress.hidden = true;
+  }
+}
+
+function renderPlayAgain(gameState) {
+  const show = gameState === 'GAME_OVER' || gameState === 'MOTION_FAILED';
+  playAgainWrap.hidden = !show;
+}
+
 function renderStatus(data) {
   scoreValue.textContent = data.score === null ? '-' : String(data.score);
   blockCountValue.textContent = String(data.detected_block_count || 0);
@@ -107,14 +189,13 @@ function renderStatus(data) {
   bridgeStatus.textContent = data.bridge_status || 'UNKNOWN';
   bridgeMessage.textContent = data.bridge_message || 'No bridge message.';
 
-  if (data.player_selection) {
-    selectionValue.textContent = `${data.player_selection.color} · id ${data.player_selection.block_id} · ${data.player_selection.selection_type} · conf ${data.player_selection.confidence}`;
-  } else {
-    selectionValue.textContent = 'None';
-  }
+  renderPlayerMessage(data);
+  renderSelection(data.player_selection);
+  renderProgress(data.game_state, data.player_progress || '');
+  renderPlayAgain(data.game_state);
 
   statusRibbon.textContent = data.last_update
-    ? `Last bridge update: ${data.last_update}`
+    ? `Last system update: ${data.last_update}`
     : 'Waiting for live ROS data.';
 
   renderBlocks(data.detected_blocks || []);
@@ -137,6 +218,7 @@ async function pollStatus() {
   }
 }
 
+setObserverHandlers();
 setButtonHandlers();
 pollStatus();
 setInterval(pollStatus, 1000);

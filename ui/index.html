@@ -7,145 +7,135 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div class="ambient-glow ambient-glow-left"></div>
+  <div class="ambient-glow ambient-glow-right"></div>
+
   <div class="page-shell">
-    <header class="hero">
+    <header class="top-bar">
       <div>
         <p class="eyebrow">Robot Memory Game</p>
-        <h1>Control Deck</h1>
-        <p class="hero-copy">
-          Thin operator interface for reading the game, motion, and perception state
-          from one place without moving game logic into the UI.
-        </p>
+        <h1>Play Surface</h1>
       </div>
-      <div class="hero-note">
-        <span class="hero-note-label">Bridge</span>
-        <strong id="bridge-status">Starting</strong>
-        <p id="bridge-message">Preparing ROS bridge.</p>
-      </div>
+      <button id="observer-toggle" class="observer-toggle" type="button" aria-expanded="false" aria-controls="observer-panel">
+        Observer Panel
+      </button>
     </header>
 
-    <main class="dashboard-grid">
-      <section class="panel panel-primary controls-panel">
-        <div class="panel-head">
-          <p class="panel-kicker">Session</p>
-          <h2>Operator Controls</h2>
-        </div>
-
-        <p class="panel-help">
-          Use these controls to manage the game session. Start initializes the system,
-          while End Game stops all active components. Next Round will be used for future round control.
+    <main class="player-stage" id="player-stage" data-tone="neutral">
+      <div class="player-stage-copy">
+        <p class="state-pill" id="player-phase">Connecting</p>
+        <h2 id="player-headline">Connecting to the game</h2>
+        <p id="player-detail">
+          Waiting for live ROS data from the robot system.
         </p>
+        <p class="step-progress" id="step-progress" hidden></p>
+      </div>
 
-        <div class="button-stack">
-          <button id="start-btn" class="action-button action-start">Start</button>
-          <button id="next-btn" class="action-button action-next">Next Round</button>
-          <button id="end-btn" class="action-button action-end">End Game</button>
+      <div class="play-again-wrap" id="play-again-wrap" hidden>
+        <button id="play-again-btn" class="play-again-btn" type="button">Play Again</button>
+      </div>
+
+      <div class="player-stage-meta">
+        <div class="player-card player-card-score">
+          <span class="card-label">Score</span>
+          <strong id="score-value">-</strong>
         </div>
-
-        <div class="preview-message" id="preview-message">
-          <p class="panel-help">
-            Start initializes and launches the game session, including vision, game logic,
-            and motion components (when available). End Game safely stops all running processes.
-            Next Round is reserved for future round control and is not yet connected to backend logic.
-          </p>
+        <div class="player-card">
+          <span class="card-label">Blocks Seen</span>
+          <strong id="block-count-value">0</strong>
         </div>
-
-        <div class="session-strip">
-          <div>
-            <span class="strip-label">Launch Profile</span>
-            <strong>3-color lab mode</strong>
-          </div>
-          <div>
-            <span class="strip-label">Motion Group</span>
-            <strong>arm</strong>
-          </div>
+        <div class="player-card">
+          <span class="card-label">Latest Selection</span>
+          <strong id="selection-player-value">None</strong>
         </div>
+      </div>
 
-        <div class="detail-card detail-card-wide process-card">
-          <span class="detail-label">Managed Processes</span>
-          <p class="panel-help">
-            This section displays the ROS nodes currently managed by the web interface.
-            Typical processes include the vision node (camera and detection),
-            game node (game logic and scoring), and motion node (robot control).
-            Their runtime status will appear here when a session is active.
-          </p>
-          <ul class="block-list" id="process-list">
-            <li>No process state yet.</li>
-          </ul>
-        </div>
-      </section>
-
-      <section class="panel scoreboard-panel">
-        <div class="panel-head">
-          <p class="panel-kicker">Live Readout</p>
-          <h2>Score and State</h2>
-          <p class="panel-help">
-            This panel summarizes the current game session, including score, visible blocks,
-            the active game state, and the latest motion feedback from the robot side.
-          </p>
-        </div>
-
-        <div class="score-cluster">
-          <div class="score-card score-card-main">
-            <span class="score-label">Score</span>
-            <strong id="score-value">-</strong>
-          </div>
-          <div class="score-card">
-            <span class="score-label">Blocks Seen</span>
-            <strong id="block-count-value">0</strong>
-          </div>
-          <div class="score-card state-card">
-            <span class="score-label">Game State</span>
-            <strong id="state-value">UNKNOWN</strong>
-          </div>
-          <div class="score-card state-card motion-card">
-            <span class="score-label">Motion Status</span>
-            <strong id="motion-value">UNKNOWN</strong>
-          </div>
-        </div>
-
-        <div class="status-ribbon" id="status-ribbon">Waiting for live ROS data.</div>
-      </section>
-
-      <section class="panel telemetry-panel">
-        <div class="panel-head">
-          <p class="panel-kicker">Live Topics</p>
-          <h2>Perception and Input</h2>
-          <p class="panel-help">
-            This section shows live perception-related information, including the latest
-            player selection and the blocks currently detected by the system.
-          </p>
-        </div>
-
-        <div class="detail-stack">
-          <div class="detail-card">
-            <span class="detail-label">Last Player Selection</span>
-            <strong id="selection-value">None</strong>
-          </div>
-          <div class="detail-card detail-card-wide">
-            <span class="detail-label">Detected Blocks</span>
-            <ul class="block-list" id="block-list">
-              <li>No live data yet.</li>
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel log-panel">
-        <div class="panel-head">
-          <p class="panel-kicker">Operator Feed</p>
-          <h2>Bridge Log</h2>
-          <p class="panel-help">
-            This log records bridge activity, connection issues, and session-related status messages.
-          </p>
-        </div>
-
-        <ol class="log-list" id="log-list">
-          <li>Waiting for bridge data.</li>
-        </ol>
-      </section>
+      <div class="player-ribbon" id="status-ribbon">
+        Waiting for live ROS data.
+      </div>
     </main>
   </div>
+
+  <aside class="observer-panel" id="observer-panel" aria-hidden="true">
+    <div class="observer-head">
+      <div>
+        <p class="eyebrow">Team View</p>
+        <h2>Observer Panel</h2>
+      </div>
+      <button id="observer-close" class="observer-close" type="button" aria-label="Close observer panel">Close</button>
+    </div>
+
+    <section class="observer-section controls-section">
+      <div class="observer-section-head">
+        <h3>Session Control</h3>
+        <p>Launch the current lab path: camera, TF bridge, vision, slot selection, game, and MoveIt motion.</p>
+      </div>
+      <div class="button-stack">
+        <button id="start-btn" class="action-button action-start">Start Session</button>
+        <button id="end-btn" class="action-button action-end">Stop Session</button>
+      </div>
+      <div class="info-banner" id="preview-message">
+        Use Start to launch the current lab runtime. This interface now starts the separate player-selection node and the MoveIt motion path.
+      </div>
+    </section>
+
+    <section class="observer-section summary-section">
+      <div class="observer-section-head">
+        <h3>Live System Summary</h3>
+        <p>Raw backend state for the team. This is the technical view, not the player-facing copy.</p>
+      </div>
+      <div class="summary-grid">
+        <div class="summary-card">
+          <span class="card-label">Bridge</span>
+          <strong id="bridge-status">Starting</strong>
+          <p id="bridge-message">Preparing ROS bridge.</p>
+        </div>
+        <div class="summary-card">
+          <span class="card-label">Game State</span>
+          <strong id="state-value">UNKNOWN</strong>
+        </div>
+        <div class="summary-card">
+          <span class="card-label">Motion Status</span>
+          <strong id="motion-value">UNKNOWN</strong>
+        </div>
+        <div class="summary-card">
+          <span class="card-label">Last Player Selection</span>
+          <strong id="selection-value">None</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="observer-section">
+      <div class="observer-section-head">
+        <h3>Managed Processes</h3>
+        <p>Processes started by this interface only.</p>
+      </div>
+      <ul class="detail-list" id="process-list">
+        <li>No process state yet.</li>
+      </ul>
+    </section>
+
+    <section class="observer-section two-column-section">
+      <div>
+        <div class="observer-section-head">
+          <h3>Detected Blocks</h3>
+          <p>Latest `/detected_blocks` payload from vision.</p>
+        </div>
+        <ul class="detail-list" id="block-list">
+          <li>No live data yet.</li>
+        </ul>
+      </div>
+      <div>
+        <div class="observer-section-head">
+          <h3>Bridge Log</h3>
+          <p>Recent UI bridge and launcher activity.</p>
+        </div>
+        <ol class="detail-list log-list" id="log-list">
+          <li>Waiting for bridge data.</li>
+        </ol>
+      </div>
+    </section>
+  </aside>
 
   <script src="app.js"></script>
 </body>
