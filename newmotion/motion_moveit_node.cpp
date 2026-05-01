@@ -1,6 +1,6 @@
 // MoveIt-backed motion executor for the memory game.
 //
-// Owns full sequence execution: receives /target_sequence, runs hover -> dip -> hover
+// Owns full sequence execution: receives /target_sequence, runs hover -> point -> hover
 // for each block, optionally returns home after the batch, and reports progress on
 // /motion_status including the sequence id.
 
@@ -56,12 +56,12 @@ class MotionMoveItNode {
     pnh_.param("max_velocity_scaling", max_velocity_scaling_, 0.10);
     pnh_.param("max_acceleration_scaling", max_acceleration_scaling_, 0.10);
 
-    pnh_.param("cartesian_eef_step", cartesian_eef_step_, 0.01);
-    pnh_.param("cartesian_fraction_min", cartesian_fraction_min_, 0.90);
+    pnh_.param("cartesian_eef_step", cartesian_eef_step_, 0.005);
+    pnh_.param("cartesian_fraction_min", cartesian_fraction_min_, 0.80);
     pnh_.param("travel_z", travel_z_, 0.35);
     pnh_.param("tool_offset_z", tool_offset_z_, 0.05);
     pnh_.param("approach_margin", approach_margin_, 0.10);
-    pnh_.param("point_dwell_sec", point_dwell_sec_, 0.5);
+    pnh_.param("point_dwell_sec", point_dwell_sec_, 0.0);
 
     pnh_.param("return_home", return_home_, true);
     pnh_.param("use_current_state_as_home", use_current_state_as_home_, true);
@@ -73,7 +73,7 @@ class MotionMoveItNode {
     pnh_.param("workspace_max_y", workspace_max_y_, 10.0);
     pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
     pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
-    pnh_.param("keep_current_orientation", keep_current_orientation_, true);
+    pnh_.param("keep_current_orientation", keep_current_orientation_, false);
 
     status_pub_ = nh_.advertise<std_msgs::String>("/motion_status", 10, true);
 
@@ -319,15 +319,18 @@ class MotionMoveItNode {
   bool cartesianDip(const geometry_msgs::Pose& hover_pose,
                     const geometry_msgs::Pose& point_pose,
                     int block_id) {
-    if (!executeCartesianSegment({point_pose}, block_id, "descent")) {
-      return false;
-    }
+    std::vector<geometry_msgs::Pose> waypoints;
+    waypoints.push_back(point_pose);
 
+    // A dwell at the point would require splitting the Cartesian motion into
+    // two executions, which reintroduces the stop-and-go behavior we are
+    // trying to remove. Keep the path continuous and ignore dwell requests.
     if (point_dwell_sec_ > 0.0) {
-      ros::Duration(point_dwell_sec_).sleep();
+      ROS_WARN_THROTTLE(5.0,
+                        "point_dwell_sec > 0 is ignored in continuous dip mode to avoid shake");
     }
-
-    return executeCartesianSegment({hover_pose}, block_id, "ascent");
+    waypoints.push_back(hover_pose);
+    return executeCartesianSegment(waypoints, block_id, "dip");
   }
 
   bool executeCartesianSegment(const std::vector<geometry_msgs::Pose>& waypoints,
@@ -476,14 +479,14 @@ class MotionMoveItNode {
   std::string planning_group_;
   std::string pose_frame_;
   double planning_time_ = 5.0;
-  double max_velocity_scaling_ = 0.10;
-  double max_acceleration_scaling_ = 0.10;
-  double cartesian_eef_step_ = 0.01;
-  double cartesian_fraction_min_ = 0.90;
-  double travel_z_ = 0.35;
-  double tool_offset_z_ = 0.05;
-  double approach_margin_ = 0.10;
-  double point_dwell_sec_ = 0.5;
+  double max_velocity_scaling_ = 0.08;
+  double max_acceleration_scaling_ = 0.05;
+  double cartesian_eef_step_ = 0.005;
+  double cartesian_fraction_min_ = 0.80;
+  double travel_z_ = 0.38;
+  double tool_offset_z_ = 0.08;
+  double approach_margin_ = 0.12;
+  double point_dwell_sec_ = 0.0;
   bool return_home_ = true;
   bool use_current_state_as_home_ = true;
   bool require_pose_frame_match_ = true;
@@ -494,7 +497,7 @@ class MotionMoveItNode {
   double workspace_max_y_ = 10.0;
   double workspace_min_z_ = -10.0;
   double workspace_max_z_ = 10.0;
-  bool keep_current_orientation_ = true;
+  bool keep_current_orientation_ = false;
 
   std::mutex mu_;
   std::condition_variable queue_cv_;
