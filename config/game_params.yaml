@@ -44,7 +44,7 @@ vision_node:
   depth_window_radius: 2
   min_depth_m: 0.10
   max_depth_m: 2.50
-  max_depth_age_sec: 0.5
+  max_depth_age_sec: 1.0
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
@@ -94,7 +94,7 @@ motion_node:
     qw: 1.0
 
 motion_moveit_node:
-  planning_group: "panda_arm"
+  planning_group: "arm"
   pose_frame: "panda_link0"
   require_pose_frame_match: true
   cartesian_eef_step: 0.01
