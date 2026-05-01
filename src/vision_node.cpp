@@ -129,6 +129,7 @@ void loadParams() {
     pnh_.param("max_candidate_jump_px", max_candidate_jump_px_, 120.0);
     pnh_.param("position_reset_timeout_sec", position_reset_timeout_sec_, 0.5);
     pnh_.param("max_position_jump_m", max_position_jump_m_, 0.10);
+    pnh_.param("base_exclusion_radius_m", base_exclusion_radius_m_, 0.0);
 
     if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
     if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
@@ -396,6 +397,22 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
                                   cfg.name.c_str(),
                                   candidate_base.x, candidate_base.y, candidate_base.z);
                 continue;
+            }
+
+            // Reject detections too close to the robot base — the Panda status LED
+            // can be mistaken for a blue block.
+            if (base_exclusion_radius_m_ > 0.0) {
+                const double dist = std::sqrt(
+                    candidate_base.x * candidate_base.x +
+                    candidate_base.y * candidate_base.y +
+                    candidate_base.z * candidate_base.z);
+                if (dist < base_exclusion_radius_m_) {
+                    ROS_WARN_THROTTLE(2.0, "Rejected %s block at (%.3f, %.3f, %.3f): within base exclusion zone (%.2fm)",
+                                      cfg.name.c_str(),
+                                      candidate_base.x, candidate_base.y, candidate_base.z,
+                                      base_exclusion_radius_m_);
+                    continue;
+                }
             }
 
             p_base = applyEmaSmoothing(cfg.id, candidate_base, frame_stamp);
@@ -824,6 +841,7 @@ double image_track_timeout_sec_ = 0.5;
 double max_candidate_jump_px_ = 120.0;
 double position_reset_timeout_sec_ = 0.5;
 double max_position_jump_m_ = 0.10;
+double base_exclusion_radius_m_ = 0.0;
 
 std::vector<ColorConfig> color_configs_;
 

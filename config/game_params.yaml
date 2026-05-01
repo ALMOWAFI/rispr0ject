@@ -46,6 +46,8 @@ vision_node:
   max_depth_m: 2.50
   max_depth_age_sec: 1.0
 
+  base_exclusion_radius_m: 0.15
+
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
   position_reset_timeout_sec: 0.5
