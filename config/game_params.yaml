@@ -101,12 +101,16 @@ motion_moveit_node:
   require_pose_frame_match: true
   max_velocity_scaling: 0.08
   max_acceleration_scaling: 0.05
-  cartesian_eef_step: 0.005
-  cartesian_fraction_min: 0.80
-  travel_z: 0.38
-  tool_offset_z: 0.08
-  approach_margin: 0.12
-  point_dwell_sec: 0.0
+  point_velocity_scaling: 0.05
+  point_acceleration_scaling: 0.03
+  min_hover_z: 0.29
+  hover_clearance_z: 0.10
+  point_clearance_z: 0.06
+  min_point_z: 0.20
+  min_dip_distance_z: 0.035
+  indicate_hold_sec: 0.20
+  max_plan_retries: 3
+  strict_pointing: false
   return_home: true
   use_current_state_as_home: true
   keep_current_orientation: false

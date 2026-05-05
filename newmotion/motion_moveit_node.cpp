@@ -1,8 +1,16 @@
 // MoveIt-backed motion executor for the memory game.
 //
-// Owns full sequence execution: receives /target_sequence, runs hover -> point -> hover
-// for each block, optionally returns home after the batch, and reports progress on
-// /motion_status including the sequence id.
+// Sequence contract stays unchanged:
+//   - subscribes to /target_sequence
+//   - publishes /motion_status with sequence_id and block_id
+//
+// Motion behavior:
+//   1. plan + execute to hover pose
+//   2. plan + execute to a lower indicate pose
+//   3. plan + execute back to hover pose
+//
+// This intentionally avoids computeCartesianPath(), because the Panda lab setup
+// was smoother and more reliable with standard MoveIt planned motions.
 
 #include <cmath>
 #include <condition_variable>
@@ -22,7 +30,6 @@
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/robot_state/robot_state.h>
-#include <moveit_msgs/RobotTrajectory.h>
 #include <ros/ros.h>
 #include <std_msgs/String.h>
 
@@ -49,19 +56,25 @@ void PublishStatus(ros::Publisher& pub,
 class MotionMoveItNode {
  public:
   MotionMoveItNode() : pnh_("~"), spinner_(2) {
-    pnh_.param("planning_group", planning_group_, std::string("panda_arm"));
+    pnh_.param("planning_group", planning_group_, std::string("arm"));
     pnh_.param("pose_frame", pose_frame_, std::string("panda_link0"));
 
     pnh_.param("planning_time", planning_time_, 5.0);
-    pnh_.param("max_velocity_scaling", max_velocity_scaling_, 0.10);
-    pnh_.param("max_acceleration_scaling", max_acceleration_scaling_, 0.10);
+    pnh_.param("max_plan_retries", max_plan_retries_, 3);
 
-    pnh_.param("cartesian_eef_step", cartesian_eef_step_, 0.005);
-    pnh_.param("cartesian_fraction_min", cartesian_fraction_min_, 0.80);
-    pnh_.param("travel_z", travel_z_, 0.35);
-    pnh_.param("tool_offset_z", tool_offset_z_, 0.05);
-    pnh_.param("approach_margin", approach_margin_, 0.10);
-    pnh_.param("point_dwell_sec", point_dwell_sec_, 0.0);
+    pnh_.param("max_velocity_scaling", max_velocity_scaling_, 0.08);
+    pnh_.param("max_acceleration_scaling", max_acceleration_scaling_, 0.05);
+    pnh_.param("point_velocity_scaling", point_velocity_scaling_, 0.05);
+    pnh_.param("point_acceleration_scaling", point_acceleration_scaling_, 0.03);
+
+    pnh_.param("min_hover_z", min_hover_z_, 0.29);
+    pnh_.param("hover_clearance_z", hover_clearance_z_, 0.10);
+    pnh_.param("point_clearance_z", point_clearance_z_, 0.06);
+    pnh_.param("min_point_z", min_point_z_, 0.20);
+    pnh_.param("min_dip_distance_z", min_dip_distance_z_, 0.035);
+
+    pnh_.param("indicate_hold_sec", indicate_hold_sec_, 0.20);
+    pnh_.param("strict_pointing", strict_pointing_, false);
 
     pnh_.param("return_home", return_home_, true);
     pnh_.param("use_current_state_as_home", use_current_state_as_home_, true);
@@ -78,14 +91,14 @@ class MotionMoveItNode {
     status_pub_ = nh_.advertise<std_msgs::String>("/motion_status", 10, true);
 
     spinner_.start();
-
     PublishStatus(status_pub_, "INIT");
 
     move_group_ = std::make_unique<moveit::planning_interface::MoveGroupInterface>(planning_group_);
     move_group_->setPlanningTime(planning_time_);
-    move_group_->setMaxVelocityScalingFactor(max_velocity_scaling_);
-    move_group_->setMaxAccelerationScalingFactor(max_acceleration_scaling_);
     move_group_->setPoseReferenceFrame(pose_frame_);
+    move_group_->setGoalPositionTolerance(0.005);
+    move_group_->setGoalOrientationTolerance(0.05);
+    move_group_->setGoalJointTolerance(0.005);
 
     configureHomeTarget();
     cacheReferencePose();
@@ -94,7 +107,6 @@ class MotionMoveItNode {
     sequence_sub_ = nh_.subscribe("/target_sequence", 10, &MotionMoveItNode::sequenceCb, this);
 
     PublishStatus(status_pub_, "IDLE");
-
     ROS_INFO("motion_moveit_node ready");
     ROS_INFO("planning_group=%s", planning_group_.c_str());
     ROS_INFO("pose_frame=%s", pose_frame_.c_str());
@@ -210,7 +222,7 @@ class MotionMoveItNode {
     move_group_->setPoseReferenceFrame(frame);
 
     const geometry_msgs::Pose hover_pose = buildHoverPose(block);
-    const geometry_msgs::Pose point_pose = buildPointPose(block);
+    const geometry_msgs::Pose point_pose = buildPointPose(block, hover_pose);
 
     if (workspace_enable_ &&
         (!withinWorkspace(hover_pose.position) || !withinWorkspace(point_pose.position))) {
@@ -221,18 +233,52 @@ class MotionMoveItNode {
     }
 
     PublishStatus(status_pub_, "MOVING_TO_TARGET", static_cast<int>(sequence_id), block.id);
-    if (!jointMove(hover_pose, block.id)) {
+    if (!moveToPoseWithRetries(hover_pose,
+                               max_velocity_scaling_,
+                               max_acceleration_scaling_,
+                               block.id,
+                               "hover")) {
       failAndStopQueue("Hover move failed", sequence_id, block.id);
       return false;
     }
 
+    bool point_succeeded = false;
     PublishStatus(status_pub_, "POINTING", static_cast<int>(sequence_id), block.id);
-    if (!cartesianDip(hover_pose, point_pose, block.id)) {
-      failAndStopQueue("Cartesian dip failed", sequence_id, block.id);
+    if (moveToPoseWithRetries(point_pose,
+                              point_velocity_scaling_,
+                              point_acceleration_scaling_,
+                              block.id,
+                              "point")) {
+      point_succeeded = true;
+      if (indicate_hold_sec_ > 0.0) {
+        ros::Duration(indicate_hold_sec_).sleep();
+      }
+    } else if (strict_pointing_) {
+      failAndStopQueue("Point move failed", sequence_id, block.id);
       return false;
+    } else {
+      ROS_WARN("Point move failed for block %d; using hover-only indication for this target", block.id);
+      if (indicate_hold_sec_ > 0.0) {
+        ros::Duration(indicate_hold_sec_).sleep();
+      }
     }
 
     PublishStatus(status_pub_, "AT_TARGET", static_cast<int>(sequence_id), block.id);
+
+    if (point_succeeded) {
+      if (!moveToPoseWithRetries(hover_pose,
+                                 point_velocity_scaling_,
+                                 point_acceleration_scaling_,
+                                 block.id,
+                                 "ascend")) {
+        if (strict_pointing_) {
+          failAndStopQueue("Ascend move failed", sequence_id, block.id);
+          return false;
+        }
+        ROS_WARN("Ascend move failed for block %d; continuing from current state", block.id);
+      }
+    }
+
     return true;
   }
 
@@ -266,22 +312,6 @@ class MotionMoveItNode {
            p.z >= workspace_min_z_ && p.z <= workspace_max_z_;
   }
 
-  geometry_msgs::Pose buildHoverPose(const memory_game::Block& block) {
-    geometry_msgs::Pose pose = orientationReferencePose();
-    pose.position.x = block.position.x;
-    pose.position.y = block.position.y;
-    pose.position.z = std::max(travel_z_, block.position.z + approach_margin_);
-    return pose;
-  }
-
-  geometry_msgs::Pose buildPointPose(const memory_game::Block& block) {
-    geometry_msgs::Pose pose = orientationReferencePose();
-    pose.position.x = block.position.x;
-    pose.position.y = block.position.y;
-    pose.position.z = block.position.z + tool_offset_z_;
-    return pose;
-  }
-
   geometry_msgs::Pose orientationReferencePose() {
     if (keep_current_orientation_) {
       return move_group_->getCurrentPose().pose;
@@ -289,77 +319,69 @@ class MotionMoveItNode {
     return reference_pose_;
   }
 
-  bool jointMove(const geometry_msgs::Pose& target_pose, int block_id) {
-    move_group_->setPoseTarget(target_pose);
+  geometry_msgs::Pose buildHoverPose(const memory_game::Block& block) {
+    geometry_msgs::Pose pose = orientationReferencePose();
+    pose.position.x = block.position.x;
+    pose.position.y = block.position.y;
+    pose.position.z = std::max(min_hover_z_, block.position.z + hover_clearance_z_);
+    return pose;
+  }
 
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    const bool planned =
-        (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  geometry_msgs::Pose buildPointPose(const memory_game::Block& block,
+                                     const geometry_msgs::Pose& hover_pose) {
+    geometry_msgs::Pose pose = orientationReferencePose();
+    pose.position.x = block.position.x;
+    pose.position.y = block.position.y;
 
-    if (!planned) {
-      ROS_WARN("Planning hover pose failed for block %d", block_id);
+    const double preferred_point_z = std::max(min_point_z_, block.position.z + point_clearance_z_);
+    const double max_allowed_point_z = hover_pose.position.z - min_dip_distance_z_;
+    pose.position.z = std::min(preferred_point_z, max_allowed_point_z);
+
+    if (hover_pose.position.z - pose.position.z < min_dip_distance_z_) {
+      pose.position.z = std::max(min_point_z_, hover_pose.position.z - min_dip_distance_z_);
+    }
+
+    return pose;
+  }
+
+  bool moveToPoseWithRetries(const geometry_msgs::Pose& target_pose,
+                             double velocity_scaling,
+                             double acceleration_scaling,
+                             int block_id,
+                             const std::string& label) {
+    move_group_->setMaxVelocityScalingFactor(velocity_scaling);
+    move_group_->setMaxAccelerationScalingFactor(acceleration_scaling);
+
+    for (int attempt = 1; attempt <= max_plan_retries_; ++attempt) {
+      move_group_->setPoseTarget(target_pose);
+
+      moveit::planning_interface::MoveGroupInterface::Plan plan;
+      const bool planned =
+          (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+      if (!planned) {
+        ROS_WARN("%s planning failed for block %d (attempt %d/%d)",
+                 label.c_str(), block_id, attempt, max_plan_retries_);
+        move_group_->clearPoseTargets();
+        continue;
+      }
+
+      const bool executed =
+          (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+      move_group_->stop();
       move_group_->clearPoseTargets();
-      return false;
+
+      if (executed) {
+        return true;
+      }
+
+      ROS_WARN("%s execution failed for block %d (attempt %d/%d)",
+               label.c_str(), block_id, attempt, max_plan_retries_);
+      ros::Duration(0.15 * attempt).sleep();
     }
 
-    const bool executed =
-        (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-
-    move_group_->stop();
-    move_group_->clearPoseTargets();
-
-    if (!executed) {
-      ROS_WARN("Executing hover pose failed for block %d", block_id);
-      return false;
-    }
-
-    return true;
-  }
-
-  bool cartesianDip(const geometry_msgs::Pose& hover_pose,
-                    const geometry_msgs::Pose& point_pose,
-                    int block_id) {
-    std::vector<geometry_msgs::Pose> waypoints;
-    waypoints.push_back(point_pose);
-
-    // A dwell at the point would require splitting the Cartesian motion into
-    // two executions, which reintroduces the stop-and-go behavior we are
-    // trying to remove. Keep the path continuous and ignore dwell requests.
-    if (point_dwell_sec_ > 0.0) {
-      ROS_WARN_THROTTLE(5.0,
-                        "point_dwell_sec > 0 is ignored in continuous dip mode to avoid shake");
-    }
-    waypoints.push_back(hover_pose);
-    return executeCartesianSegment(waypoints, block_id, "dip");
-  }
-
-  bool executeCartesianSegment(const std::vector<geometry_msgs::Pose>& waypoints,
-                               int block_id,
-                               const std::string& segment_name) {
-    moveit_msgs::RobotTrajectory trajectory;
-    const double fraction = move_group_->computeCartesianPath(
-        waypoints, cartesian_eef_step_, 0.0, trajectory);
-
-    if (fraction < cartesian_fraction_min_) {
-      ROS_WARN("Cartesian %s fraction %.2f below minimum %.2f for block %d",
-               segment_name.c_str(), fraction, cartesian_fraction_min_, block_id);
-      return false;
-    }
-
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    plan.trajectory_ = trajectory;
-
-    const bool executed =
-        (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-
-    move_group_->stop();
-    if (!executed) {
-      ROS_WARN("Executing Cartesian %s failed for block %d",
-               segment_name.c_str(), block_id);
-      return false;
-    }
-
-    return true;
+    return false;
   }
 
   bool returnHome() {
@@ -373,21 +395,32 @@ class MotionMoveItNode {
     }
 
     move_group_->setJointValueTarget(home_joint_values_);
+    move_group_->setMaxVelocityScalingFactor(max_velocity_scaling_);
+    move_group_->setMaxAccelerationScalingFactor(max_acceleration_scaling_);
 
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    const bool planned =
-        (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+    for (int attempt = 1; attempt <= max_plan_retries_; ++attempt) {
+      moveit::planning_interface::MoveGroupInterface::Plan plan;
+      const bool planned =
+          (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
-    if (!planned) {
-      ROS_WARN("Planning home failed");
-      return false;
+      if (!planned) {
+        ROS_WARN("Planning home failed (attempt %d/%d)", attempt, max_plan_retries_);
+        continue;
+      }
+
+      const bool executed =
+          (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+      move_group_->stop();
+      if (executed) {
+        return true;
+      }
+
+      ROS_WARN("Executing home failed (attempt %d/%d)", attempt, max_plan_retries_);
+      ros::Duration(0.15 * attempt).sleep();
     }
 
-    const bool executed =
-        (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-
-    move_group_->stop();
-    return executed;
+    return false;
   }
 
   void cacheReferencePose() {
@@ -469,7 +502,6 @@ class MotionMoveItNode {
 
   ros::Publisher status_pub_;
   ros::Subscriber sequence_sub_;
-
   ros::AsyncSpinner spinner_;
 
   std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
@@ -478,15 +510,24 @@ class MotionMoveItNode {
 
   std::string planning_group_;
   std::string pose_frame_;
+
   double planning_time_ = 5.0;
+  int max_plan_retries_ = 3;
+
   double max_velocity_scaling_ = 0.08;
   double max_acceleration_scaling_ = 0.05;
-  double cartesian_eef_step_ = 0.005;
-  double cartesian_fraction_min_ = 0.80;
-  double travel_z_ = 0.38;
-  double tool_offset_z_ = 0.08;
-  double approach_margin_ = 0.12;
-  double point_dwell_sec_ = 0.0;
+  double point_velocity_scaling_ = 0.05;
+  double point_acceleration_scaling_ = 0.03;
+
+  double min_hover_z_ = 0.29;
+  double hover_clearance_z_ = 0.10;
+  double point_clearance_z_ = 0.06;
+  double min_point_z_ = 0.20;
+  double min_dip_distance_z_ = 0.035;
+
+  double indicate_hold_sec_ = 0.20;
+  bool strict_pointing_ = false;
+
   bool return_home_ = true;
   bool use_current_state_as_home_ = true;
   bool require_pose_frame_match_ = true;
