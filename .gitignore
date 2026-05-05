@@ -46,6 +46,7 @@ rospack_cache/
 *.tmp
 *.bak
 *.backup
+.codex
 
 # Compiled Message/Service Files
 msg_gen/
