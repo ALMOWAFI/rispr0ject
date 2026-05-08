@@ -26,6 +26,9 @@ const observerPanel = document.getElementById('observer-panel');
 const observerToggle = document.getElementById('observer-toggle');
 const observerClose = document.getElementById('observer-close');
 
+let lastGameState = null;
+let lastScore = null;
+
 async function postJson(url) {
   const response = await fetch(url, {
     method: 'POST',
@@ -191,6 +194,23 @@ function renderPlayAgain(gameState) {
 }
 
 function renderStatus(data) {
+
+  const currentState = data.game_state || 'UNKNOWN';
+  const currentScore = data.score;
+
+  if (lastGameState !== null && currentState !== lastGameState) {
+    if (currentState === 'GAME_OVER' || currentState === 'MOTION_FAILED') {
+      playSound('sounds/Game_Over.mp3');
+    }
+  }
+
+  if (lastScore !== null && currentScore !== null && currentScore > lastScore) {
+    playSound('sounds/Level_Up.mp3');
+  }
+
+  lastGameState = currentState;
+  lastScore = currentScore;
+
   scoreValue.textContent = data.score === null ? '-' : String(data.score);
   blockCountValue.textContent = String(data.detected_block_count || 0);
   stateValue.textContent = data.game_state || 'UNKNOWN';
