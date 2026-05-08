@@ -130,6 +130,13 @@ void loadParams() {
     pnh_.param("position_reset_timeout_sec", position_reset_timeout_sec_, 0.5);
     pnh_.param("max_position_jump_m", max_position_jump_m_, 0.10);
     pnh_.param("base_exclusion_radius_m", base_exclusion_radius_m_, 0.15);
+    pnh_.param("workspace_enable", workspace_enable_, false);
+    pnh_.param("workspace_min_x", workspace_min_x_, -10.0);
+    pnh_.param("workspace_max_x", workspace_max_x_, 10.0);
+    pnh_.param("workspace_min_y", workspace_min_y_, -10.0);
+    pnh_.param("workspace_max_y", workspace_max_y_, 10.0);
+    pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
+    pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
 
     if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
     if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
@@ -399,6 +406,14 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
                 continue;
             }
 
+            if (workspace_enable_ && !withinWorkspace(candidate_base)) {
+                ROS_WARN_THROTTLE(2.0,
+                                  "Rejected %s block at (%.3f, %.3f, %.3f): outside workspace",
+                                  cfg.name.c_str(),
+                                  candidate_base.x, candidate_base.y, candidate_base.z);
+                continue;
+            }
+
             // Reject detections too close to the robot base — the Panda status LED
             // can be mistaken for a blue block.
             if (base_exclusion_radius_m_ > 0.0) {
@@ -464,6 +479,12 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
     }
 
     ROS_DEBUG_THROTTLE(1.0, "Published %zu detected blocks", blocks.size());
+}
+
+bool withinWorkspace(const geometry_msgs::Point& point) const {
+    return point.x >= workspace_min_x_ && point.x <= workspace_max_x_ &&
+           point.y >= workspace_min_y_ && point.y <= workspace_max_y_ &&
+           point.z >= workspace_min_z_ && point.z <= workspace_max_z_;
 }
 
 
@@ -842,6 +863,13 @@ double max_candidate_jump_px_ = 120.0;
 double position_reset_timeout_sec_ = 0.5;
 double max_position_jump_m_ = 0.10;
 double base_exclusion_radius_m_ = 0.0;
+bool workspace_enable_ = false;
+double workspace_min_x_ = -10.0;
+double workspace_max_x_ = 10.0;
+double workspace_min_y_ = -10.0;
+double workspace_max_y_ = 10.0;
+double workspace_min_z_ = -10.0;
+double workspace_max_z_ = 10.0;
 
 std::vector<ColorConfig> color_configs_;
 
@@ -869,4 +897,3 @@ int main(int argc, char** argv) {
     ros::spin();
     return 0;
 }
-
