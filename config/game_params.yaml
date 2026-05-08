@@ -103,11 +103,11 @@ motion_moveit_node:
   max_acceleration_scaling: 0.05
   point_velocity_scaling: 0.05
   point_acceleration_scaling: 0.03
-  min_hover_z: 0.29
-  hover_clearance_z: 0.10
-  point_clearance_z: 0.06
-  min_point_z: 0.20
-  min_dip_distance_z: 0.035
+  hover_target_z: 0.28
+  hover_min_z: 0.25
+  hover_max_z: 0.30
+  point_dip_distance_z: 0.10
+  point_min_clearance_z: 0.06
   indicate_hold_sec: 0.20
   max_plan_retries: 3
   strict_pointing: false

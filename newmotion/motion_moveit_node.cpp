@@ -67,11 +67,11 @@ class MotionMoveItNode {
     pnh_.param("point_velocity_scaling", point_velocity_scaling_, 0.05);
     pnh_.param("point_acceleration_scaling", point_acceleration_scaling_, 0.03);
 
-    pnh_.param("min_hover_z", min_hover_z_, 0.29);
-    pnh_.param("hover_clearance_z", hover_clearance_z_, 0.10);
-    pnh_.param("point_clearance_z", point_clearance_z_, 0.06);
-    pnh_.param("min_point_z", min_point_z_, 0.20);
-    pnh_.param("min_dip_distance_z", min_dip_distance_z_, 0.035);
+    pnh_.param("hover_target_z", hover_target_z_, 0.28);
+    pnh_.param("hover_min_z", hover_min_z_, 0.25);
+    pnh_.param("hover_max_z", hover_max_z_, 0.30);
+    pnh_.param("point_dip_distance_z", point_dip_distance_z_, 0.10);
+    pnh_.param("point_min_clearance_z", point_min_clearance_z_, 0.06);
 
     pnh_.param("indicate_hold_sec", indicate_hold_sec_, 0.20);
     pnh_.param("strict_pointing", strict_pointing_, false);
@@ -323,7 +323,9 @@ class MotionMoveItNode {
     geometry_msgs::Pose pose = orientationReferencePose();
     pose.position.x = block.position.x;
     pose.position.y = block.position.y;
-    pose.position.z = std::max(min_hover_z_, block.position.z + hover_clearance_z_);
+    const double min_safe_hover_z = block.position.z + point_min_clearance_z_ + point_dip_distance_z_;
+    const double desired_hover_z = std::max(hover_target_z_, min_safe_hover_z);
+    pose.position.z = std::min(hover_max_z_, std::max(hover_min_z_, desired_hover_z));
     return pose;
   }
 
@@ -333,13 +335,9 @@ class MotionMoveItNode {
     pose.position.x = block.position.x;
     pose.position.y = block.position.y;
 
-    const double preferred_point_z = std::max(min_point_z_, block.position.z + point_clearance_z_);
-    const double max_allowed_point_z = hover_pose.position.z - min_dip_distance_z_;
-    pose.position.z = std::min(preferred_point_z, max_allowed_point_z);
-
-    if (hover_pose.position.z - pose.position.z < min_dip_distance_z_) {
-      pose.position.z = std::max(min_point_z_, hover_pose.position.z - min_dip_distance_z_);
-    }
+    const double min_safe_point_z = block.position.z + point_min_clearance_z_;
+    const double desired_point_z = hover_pose.position.z - point_dip_distance_z_;
+    pose.position.z = std::max(min_safe_point_z, desired_point_z);
 
     return pose;
   }
@@ -519,11 +517,11 @@ class MotionMoveItNode {
   double point_velocity_scaling_ = 0.05;
   double point_acceleration_scaling_ = 0.03;
 
-  double min_hover_z_ = 0.29;
-  double hover_clearance_z_ = 0.10;
-  double point_clearance_z_ = 0.06;
-  double min_point_z_ = 0.20;
-  double min_dip_distance_z_ = 0.035;
+  double hover_target_z_ = 0.28;
+  double hover_min_z_ = 0.25;
+  double hover_max_z_ = 0.30;
+  double point_dip_distance_z_ = 0.10;
+  double point_min_clearance_z_ = 0.06;
 
   double indicate_hold_sec_ = 0.20;
   bool strict_pointing_ = false;
