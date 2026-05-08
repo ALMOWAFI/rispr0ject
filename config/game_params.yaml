@@ -105,6 +105,10 @@ motion_moveit_node:
   point_acceleration_scaling: 0.03
   min_hover_z: 0.30
   hover_clearance_z: 0.24
+  stage_hover_motion: true
+  min_transit_z: 0.40
+  xy_waypoint_tolerance: 0.01
+  z_waypoint_tolerance: 0.01
   point_clearance_z: 0.10
   min_point_z: 0.14
   min_dip_distance_z: 0.08

@@ -69,6 +69,10 @@ class MotionMoveItNode {
 
     pnh_.param("min_hover_z", min_hover_z_, 0.30);
     pnh_.param("hover_clearance_z", hover_clearance_z_, 0.24);
+    pnh_.param("stage_hover_motion", stage_hover_motion_, true);
+    pnh_.param("min_transit_z", min_transit_z_, 0.40);
+    pnh_.param("xy_waypoint_tolerance", xy_waypoint_tolerance_, 0.01);
+    pnh_.param("z_waypoint_tolerance", z_waypoint_tolerance_, 0.01);
     pnh_.param("point_clearance_z", point_clearance_z_, 0.10);
     pnh_.param("min_point_z", min_point_z_, 0.14);
     pnh_.param("min_dip_distance_z", min_dip_distance_z_, 0.08);
@@ -224,6 +228,11 @@ class MotionMoveItNode {
     const geometry_msgs::Pose hover_pose = buildHoverPose(block);
     const geometry_msgs::Pose point_pose = buildPointPose(block, hover_pose);
 
+    ROS_INFO("Block %d target poses: hover [%.3f, %.3f, %.3f], point [%.3f, %.3f, %.3f]",
+             block.id,
+             hover_pose.position.x, hover_pose.position.y, hover_pose.position.z,
+             point_pose.position.x, point_pose.position.y, point_pose.position.z);
+
     if (workspace_enable_ &&
         (!withinWorkspace(hover_pose.position) || !withinWorkspace(point_pose.position))) {
       ROS_ERROR("Rejecting block %d in sequence %u: hover/point pose outside workspace",
@@ -233,11 +242,7 @@ class MotionMoveItNode {
     }
 
     PublishStatus(status_pub_, "MOVING_TO_TARGET", static_cast<int>(sequence_id), block.id);
-    if (!moveToPoseWithRetries(hover_pose,
-                               max_velocity_scaling_,
-                               max_acceleration_scaling_,
-                               block.id,
-                               "hover")) {
+    if (!moveToHoverPoseWithRetries(hover_pose, block.id)) {
       failAndStopQueue("Hover move failed", sequence_id, block.id);
       return false;
     }
@@ -344,6 +349,81 @@ class MotionMoveItNode {
     return pose;
   }
 
+  std::string poseToString(const geometry_msgs::Pose& pose) const {
+    std::ostringstream oss;
+    oss << "[" << pose.position.x << ", " << pose.position.y << ", " << pose.position.z
+        << "] q=[" << pose.orientation.x << ", " << pose.orientation.y << ", "
+        << pose.orientation.z << ", " << pose.orientation.w << "]";
+    return oss.str();
+  }
+
+  double planarDistance(const geometry_msgs::Point& a,
+                        const geometry_msgs::Point& b) const {
+    return std::hypot(a.x - b.x, a.y - b.y);
+  }
+
+  bool moveToHoverPoseWithRetries(const geometry_msgs::Pose& hover_pose, int block_id) {
+    if (!stage_hover_motion_) {
+      return moveToPoseWithRetries(hover_pose,
+                                   max_velocity_scaling_,
+                                   max_acceleration_scaling_,
+                                   block_id,
+                                   "hover");
+    }
+
+    const geometry_msgs::Pose current_pose = move_group_->getCurrentPose().pose;
+    const double transit_z =
+        std::max(min_transit_z_, std::max(current_pose.position.z, hover_pose.position.z));
+
+    geometry_msgs::Pose lift_pose = current_pose;
+    lift_pose.position.z = transit_z;
+
+    geometry_msgs::Pose transit_pose = hover_pose;
+    transit_pose.position.z = transit_z;
+
+    const bool needs_lift =
+        std::fabs(current_pose.position.z - transit_z) > z_waypoint_tolerance_;
+    const bool needs_transit =
+        planarDistance(current_pose.position, hover_pose.position) > xy_waypoint_tolerance_;
+    const bool needs_descent =
+        std::fabs(transit_z - hover_pose.position.z) > z_waypoint_tolerance_;
+
+    if (needs_lift) {
+      ROS_INFO("Block %d hover lift target %s", block_id, poseToString(lift_pose).c_str());
+      if (!moveToPoseWithRetries(lift_pose,
+                                 max_velocity_scaling_,
+                                 max_acceleration_scaling_,
+                                 block_id,
+                                 "hover-lift")) {
+        return false;
+      }
+    }
+
+    if (needs_transit) {
+      ROS_INFO("Block %d hover transit target %s", block_id, poseToString(transit_pose).c_str());
+      if (!moveToPoseWithRetries(transit_pose,
+                                 max_velocity_scaling_,
+                                 max_acceleration_scaling_,
+                                 block_id,
+                                 "hover-transit")) {
+        return false;
+      }
+    }
+
+    if (needs_descent) {
+      ROS_INFO("Block %d hover descend target %s", block_id, poseToString(hover_pose).c_str());
+      if (!moveToPoseWithRetries(hover_pose,
+                                 max_velocity_scaling_,
+                                 max_acceleration_scaling_,
+                                 block_id,
+                                 "hover-descend")) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   bool moveToPoseWithRetries(const geometry_msgs::Pose& target_pose,
                              double velocity_scaling,
                              double acceleration_scaling,
@@ -353,6 +433,7 @@ class MotionMoveItNode {
     move_group_->setMaxAccelerationScalingFactor(acceleration_scaling);
 
     for (int attempt = 1; attempt <= max_plan_retries_; ++attempt) {
+      move_group_->setStartStateToCurrentState();
       move_group_->setPoseTarget(target_pose);
 
       moveit::planning_interface::MoveGroupInterface::Plan plan;
@@ -362,6 +443,8 @@ class MotionMoveItNode {
       if (!planned) {
         ROS_WARN("%s planning failed for block %d (attempt %d/%d)",
                  label.c_str(), block_id, attempt, max_plan_retries_);
+        ROS_WARN("%s target pose for block %d: %s",
+                 label.c_str(), block_id, poseToString(target_pose).c_str());
         move_group_->clearPoseTargets();
         continue;
       }
@@ -378,6 +461,8 @@ class MotionMoveItNode {
 
       ROS_WARN("%s execution failed for block %d (attempt %d/%d)",
                label.c_str(), block_id, attempt, max_plan_retries_);
+      ROS_WARN("%s target pose for block %d: %s",
+               label.c_str(), block_id, poseToString(target_pose).c_str());
       ros::Duration(0.15 * attempt).sleep();
     }
 
@@ -399,6 +484,7 @@ class MotionMoveItNode {
     move_group_->setMaxAccelerationScalingFactor(max_acceleration_scaling_);
 
     for (int attempt = 1; attempt <= max_plan_retries_; ++attempt) {
+      move_group_->setStartStateToCurrentState();
       moveit::planning_interface::MoveGroupInterface::Plan plan;
       const bool planned =
           (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
@@ -521,6 +607,10 @@ class MotionMoveItNode {
 
   double min_hover_z_ = 0.30;
   double hover_clearance_z_ = 0.24;
+  bool stage_hover_motion_ = true;
+  double min_transit_z_ = 0.40;
+  double xy_waypoint_tolerance_ = 0.01;
+  double z_waypoint_tolerance_ = 0.01;
   double point_clearance_z_ = 0.10;
   double min_point_z_ = 0.14;
   double min_dip_distance_z_ = 0.08;
