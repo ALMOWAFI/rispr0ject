@@ -69,7 +69,7 @@ class MotionMoveItNode {
 
     pnh_.param("min_hover_z", min_hover_z_, 0.30);
     pnh_.param("hover_clearance_z", hover_clearance_z_, 0.24);
-    pnh_.param("stage_hover_motion", stage_hover_motion_, true);
+    pnh_.param("stage_hover_motion", stage_hover_motion_, false);
     pnh_.param("fallback_direct_hover_on_stage_failure",
                fallback_direct_hover_on_stage_failure_,
                true);
@@ -626,7 +626,7 @@ class MotionMoveItNode {
 
   double min_hover_z_ = 0.30;
   double hover_clearance_z_ = 0.24;
-  bool stage_hover_motion_ = true;
+  bool stage_hover_motion_ = false;
   bool fallback_direct_hover_on_stage_failure_ = true;
   double min_transit_z_ = 0.40;
   double xy_waypoint_tolerance_ = 0.01;
