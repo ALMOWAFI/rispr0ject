@@ -1,3 +1,8 @@
+function playSound(file) {
+  const audio = new Audio(file);
+  audio.volume = 0.7;
+  audio.play();
+}
 const scoreValue = document.getElementById('score-value');
 const blockCountValue = document.getElementById('block-count-value');
 const stateValue = document.getElementById('state-value');
@@ -57,6 +62,10 @@ function setObserverHandlers() {
 
 function setButtonHandlers() {
   document.getElementById('start-btn').addEventListener('click', async () => {
+
+   playSound('sounds/Game_Start.mp3');
+
+
     try {
       const result = await postJson('/api/start');
       previewMessage.textContent = result.message;
