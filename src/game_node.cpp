@@ -369,6 +369,7 @@ private:
         }
 
         if (status.state == "IDLE" && motion_started_for_sequence_) {
+            show_failsafe_timer_.stop();
             waiting_for_motion_ = false;
             motion_started_for_sequence_ = false;
 
@@ -505,6 +506,7 @@ private:
         sequence_targets_completed_ = 0;
         sequence_sent_to_motion_ = false;
         target_sub_wait_start_ = ros::Time(0);
+        show_failsafe_timer_.stop();
         target_sub_wait_timer_.stop();
         active_sequence_id_ = next_sequence_id_++;
 
@@ -598,6 +600,7 @@ private:
         const double per_target_budget_sec = motion_timeout_per_target_sec_;
         const double timeout_sec =
             std::max(5.0, per_target_budget_sec * static_cast<double>(sequence_.size()) + motion_timeout_padding_sec_);
+        show_failsafe_timer_.stop();
         show_failsafe_timer_ = nh_.createTimer(
             ros::Duration(timeout_sec),
             &GameNode::showFailsafeCallback,

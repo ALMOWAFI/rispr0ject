@@ -525,7 +525,6 @@ class MotionMoveItNode {
 
   double indicate_hold_sec_ = 0.20;
   bool strict_pointing_ = false;
-
   bool return_home_ = true;
   bool use_current_state_as_home_ = true;
   bool require_pose_frame_match_ = true;

@@ -41,8 +41,11 @@
     <node name="game_node" pkg="memory_game" type="game_node" output="screen">
     </node>
     
-    <!-- Motion Node -->
-    <node name="motion_node" pkg="memory_game" type="motion_node" output="screen">
+    <!-- Motion node: demo path in RViz, MoveIt path on the real robot -->
+    <node unless="$(arg use_real_robot)" name="motion_node" pkg="memory_game" type="motion_node" output="screen">
+    </node>
+    <node if="$(arg use_real_robot)" name="motion_moveit_node" pkg="memory_game" type="motion_moveit_node" output="screen">
+        <param name="planning_group" value="arm"/>
     </node>
     
     <!-- RViz (optional) -->
