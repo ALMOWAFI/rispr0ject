@@ -1,9 +1,134 @@
+/**
+ * SoundManager: Generates futuristic synth sounds using Web Audio API.
+ * This avoids needing many external MP3 files.
+ */
+class SoundManager {
+  constructor() {
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.masterGain = this.ctx.createGain();
+    this.masterGain.gain.value = 0.4;
+    this.masterGain.connect(this.ctx.destination);
+  }
+
+  // A clean, high-tech "blip"
+  beep(freq = 440, duration = 0.1, type = 'sine') {
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+
+    gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+
+    osc.start();
+    osc.stop(this.ctx.currentTime + duration);
+  }
+
+  // Futuristic power-up/down chime
+  chime(up = true) {
+    const now = this.ctx.currentTime;
+    [0, 0.1, 0.2].forEach((delay, i) => {
+      const freq = up ? 440 * Math.pow(1.5, i) : 660 * Math.pow(0.7, i);
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.frequency.setValueAtTime(freq, now + delay);
+      gain.gain.setValueAtTime(0.1, now + delay);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.5);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now + delay);
+      osc.stop(now + delay + 0.5);
+    });
+  }
+
+  success() {
+    this.beep(880, 0.1);
+    setTimeout(() => this.beep(1320, 0.2), 100);
+  }
+
+  error() {
+    this.beep(220, 0.3, 'sawtooth');
+  }
+}
+
+/**
+ * SpeechManager: Handles verbal feedback using the browser's speech synthesis.
+ */
+class SpeechManager {
+  constructor() {
+    this.synth = window.speechSynthesis;
+    this.voice = null;
+    // Try to find a high-quality "robot" or "natural" voice
+    const setVoice = () => {
+      const voices = this.synth.getVoices();
+      this.voice = voices.find(v => v.name.includes('Google') || v.name.includes('Natural')) || voices[0];
+    };
+    setVoice();
+    if (speechSynthesis.onvoiceschanged !== undefined) {
+      speechSynthesis.onvoiceschanged = setVoice;
+    }
+  }
+
+  say(text) {
+    if (!this.synth || this.synth.speaking) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    if (this.voice) utterance.voice = this.voice;
+    utterance.pitch = 0.9; // Slightly lower for a more "serious" tone
+    utterance.rate = 1.0;
+    this.synth.speak(utterance);
+  }
+}
+
+const sounds = new SoundManager();
+const speech = new SpeechManager();
+let lastState = 'UNKNOWN';
+let lastSelection = null;
+
+function handleStateChange(state, data) {
+  switch (state) {
+    case 'IDLE':
+      if (lastState === 'UNKNOWN') {
+        playSound('sounds/Game_Start.mp3');
+        speech.say("System initialized.");
+      } else {
+        speech.say("System ready.");
+      }
+      break;
+    case 'SHOWING_SEQUENCE':
+      sounds.chime(true);
+      speech.say("Watch the sequence.");
+      break;
+    case 'WAITING_PLAYER':
+      sounds.beep(880, 0.2);
+      speech.say("Your turn.");
+      break;
+    case 'ROUND_PAUSE':
+      sounds.success();
+      speech.say("Correct.");
+      break;
+    case 'GAME_OVER':
+      sounds.chime(false);
+      speech.say(`Game over. Your final score is ${data.score || 0}.`);
+      break;
+    case 'MOTION_FAILED':
+      sounds.error();
+      speech.say("System error detected.");
+      break;
+  }
+}
+
 function playSound(file) {
   const audio = new Audio(file);
   audio.volume = 0.7;
   audio.play();
 }
+
 const scoreValue = document.getElementById('score-value');
+
 const blockCountValue = document.getElementById('block-count-value');
 const stateValue = document.getElementById('state-value');
 const motionValue = document.getElementById('motion-value');
