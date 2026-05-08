@@ -70,6 +70,9 @@ class MotionMoveItNode {
     pnh_.param("min_hover_z", min_hover_z_, 0.30);
     pnh_.param("hover_clearance_z", hover_clearance_z_, 0.24);
     pnh_.param("stage_hover_motion", stage_hover_motion_, true);
+    pnh_.param("fallback_direct_hover_on_stage_failure",
+               fallback_direct_hover_on_stage_failure_,
+               true);
     pnh_.param("min_transit_z", min_transit_z_, 0.40);
     pnh_.param("xy_waypoint_tolerance", xy_waypoint_tolerance_, 0.01);
     pnh_.param("z_waypoint_tolerance", z_waypoint_tolerance_, 0.01);
@@ -363,12 +366,16 @@ class MotionMoveItNode {
   }
 
   bool moveToHoverPoseWithRetries(const geometry_msgs::Pose& hover_pose, int block_id) {
-    if (!stage_hover_motion_) {
+    const auto direct_hover = [&]() {
       return moveToPoseWithRetries(hover_pose,
                                    max_velocity_scaling_,
                                    max_acceleration_scaling_,
                                    block_id,
                                    "hover");
+    };
+
+    if (!stage_hover_motion_) {
+      return direct_hover();
     }
 
     const geometry_msgs::Pose current_pose = move_group_->getCurrentPose().pose;
@@ -395,7 +402,11 @@ class MotionMoveItNode {
                                  max_acceleration_scaling_,
                                  block_id,
                                  "hover-lift")) {
-        return false;
+        if (!fallback_direct_hover_on_stage_failure_) {
+          return false;
+        }
+        ROS_WARN("Block %d hover-lift failed; falling back to direct hover target", block_id);
+        return direct_hover();
       }
     }
 
@@ -406,7 +417,11 @@ class MotionMoveItNode {
                                  max_acceleration_scaling_,
                                  block_id,
                                  "hover-transit")) {
-        return false;
+        if (!fallback_direct_hover_on_stage_failure_) {
+          return false;
+        }
+        ROS_WARN("Block %d hover-transit failed; falling back to direct hover target", block_id);
+        return direct_hover();
       }
     }
 
@@ -417,7 +432,11 @@ class MotionMoveItNode {
                                  max_acceleration_scaling_,
                                  block_id,
                                  "hover-descend")) {
-        return false;
+        if (!fallback_direct_hover_on_stage_failure_) {
+          return false;
+        }
+        ROS_WARN("Block %d hover-descend failed; falling back to direct hover target", block_id);
+        return direct_hover();
       }
     }
 
@@ -608,6 +627,7 @@ class MotionMoveItNode {
   double min_hover_z_ = 0.30;
   double hover_clearance_z_ = 0.24;
   bool stage_hover_motion_ = true;
+  bool fallback_direct_hover_on_stage_failure_ = true;
   double min_transit_z_ = 0.40;
   double xy_waypoint_tolerance_ = 0.01;
   double z_waypoint_tolerance_ = 0.01;
