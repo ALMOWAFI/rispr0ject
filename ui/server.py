@@ -197,6 +197,8 @@ class BridgeState:
             "player_selection": None,
             "player_progress": "",
             "player_message": build_player_message("UNKNOWN", "UNKNOWN", None),
+            "session_starting": False,
+            "session_running": False,
             "process_status": {},
             "last_update": None,
             "log": [
@@ -294,7 +296,13 @@ class ProcessManager:
         return {"label": label, "running": running, "pid": proc.pid, "log_path": log_path}
 
     def refresh_state(self) -> None:
-        self.state.update(process_status={name: self._status_for(name) for name in START_COMMANDS})
+        process_status = {name: self._status_for(name) for name in START_COMMANDS}
+        session_running = any(info.get("running") for info in process_status.values())
+        self.state.update(
+            process_status=process_status,
+            session_starting=self._starting,
+            session_running=session_running,
+        )
 
     def _wait_for_ros_node(self, node_name: str, timeout: float) -> bool:
         """Poll rosnode list until node_name appears or timeout expires."""
@@ -373,6 +381,7 @@ class ProcessManager:
                 }
             self._starting = True
 
+        self.refresh_state()
         threading.Thread(target=self._sequenced_start, daemon=True).start()
         return {"ok": True, "message": "Session startup initiated — processes will start in sequence."}
 
