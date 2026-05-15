@@ -48,7 +48,16 @@ vision_node:
   max_depth_m: 2.50
   max_depth_age_sec: 1.0
 
-  base_exclusion_radius_m: 0.15
+  base_exclusion_radius_m: 0.20
+
+  # Spherical zones in `target_frame` (panda_link0) where detections are rejected.
+  # Use this to mask persistent false positives (e.g., a yellow box in the corner).
+  # Each entry: { x, y, z, radius } in meters.
+  extra_exclusions: []
+  # Example:
+  # extra_exclusions:
+  #   - { x: 0.85, y: 0.40, z: 0.0, radius: 0.20 }   # far yellow box
+  #   - { x: 0.0,  y: -0.30, z: 0.0, radius: 0.15 }
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
