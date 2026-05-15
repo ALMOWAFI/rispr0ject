@@ -53,11 +53,9 @@ vision_node:
   # Spherical zones in `target_frame` (panda_link0) where detections are rejected.
   # Use this to mask persistent false positives (e.g., a yellow box in the corner).
   # Each entry: { x, y, z, radius } in meters.
-  extra_exclusions: []
-  # Example:
-  # extra_exclusions:
-  #   - { x: 0.85, y: 0.40, z: 0.0, radius: 0.20 }   # far yellow box
-  #   - { x: 0.0,  y: -0.30, z: 0.0, radius: 0.15 }
+  extra_exclusions:
+    - { x: 0.65, y: -0.20, z: 0.0, radius: 0.25 }   # behind blue "corner"
+    - { x: 0.65, y: 0.40,  z: 0.0, radius: 0.25 }   # behind green "edge"
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
