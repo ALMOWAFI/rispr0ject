@@ -1,109 +1,12 @@
-class SoundManager {
-  constructor() {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    this.ctx = AudioCtx ? new AudioCtx() : null;
-    this.masterGain = this.ctx ? this.ctx.createGain() : null;
-    if (this.masterGain) {
-      this.masterGain.gain.value = 0.35;
-      this.masterGain.connect(this.ctx.destination);
-    }
-  }
+function playSound(file, speed = 1) {
+  const audio = new Audio(file);
+  audio.volume = 0.7;
+  audio.playbackRate = speed;
 
-  async unlock() {
-    if (this.ctx && this.ctx.state === 'suspended') {
-      await this.ctx.resume();
-    }
-  }
-
-  beep(freq = 440, duration = 0.1, type = 'sine', volume = 0.16) {
-    if (!this.ctx || !this.masterGain) {
-      return;
-    }
-
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    const now = this.ctx.currentTime;
-
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, now);
-    gain.gain.setValueAtTime(volume, now);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
-    osc.connect(gain);
-    gain.connect(this.masterGain);
-    osc.start(now);
-    osc.stop(now + duration);
-  }
-
-  chime(up = true) {
-    if (!this.ctx || !this.masterGain) {
-      return;
-    }
-
-    const base = up ? 440 : 660;
-    const ratios = up ? [1.0, 1.33, 1.66] : [1.0, 0.76, 0.58];
-    ratios.forEach((ratio, index) => {
-      window.setTimeout(() => {
-        this.beep(base * ratio, 0.22, 'triangle', 0.12);
-      }, index * 110);
-    });
-  }
-
-  success() {
-    this.beep(880, 0.08, 'triangle', 0.14);
-    window.setTimeout(() => this.beep(1320, 0.16, 'triangle', 0.12), 100);
-  }
-
-  error() {
-    this.beep(260, 0.24, 'sawtooth', 0.14);
-    window.setTimeout(() => this.beep(180, 0.28, 'sawtooth', 0.12), 120);
-  }
+  audio.play().catch((error) => {
+    console.warn('Sound could not play:', error);
+  });
 }
-
-class SpeechManager {
-  constructor() {
-    this.synth = window.speechSynthesis || null;
-    this.voice = null;
-    this.enabled = false;
-    this.setVoice = this.setVoice.bind(this);
-    this.setVoice();
-    if (this.synth && typeof this.synth.onvoiceschanged !== 'undefined') {
-      this.synth.onvoiceschanged = this.setVoice;
-    }
-  }
-
-  setVoice() {
-    if (!this.synth) {
-      return;
-    }
-    const voices = this.synth.getVoices();
-    this.voice = voices.find((v) => v.name.includes('Google') || v.name.includes('Natural')) || voices[0] || null;
-  }
-
-  enable() {
-    this.enabled = true;
-  }
-
-  say(text) {
-    if (!this.enabled || !this.synth || !text) {
-      return;
-    }
-    this.synth.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    if (this.voice) {
-      utterance.voice = this.voice;
-    }
-    utterance.pitch = 0.95;
-    utterance.rate = 1.0;
-    this.synth.speak(utterance);
-  }
-}
-
-const START_SOUND_PATH = 'sounds/Game_Start.mp3';
-
-const sounds = new SoundManager();
-const speech = new SpeechManager();
-
 const scoreValue = document.getElementById('score-value');
 const blockCountValue = document.getElementById('block-count-value');
 const stateValue = document.getElementById('state-value');
@@ -122,33 +25,15 @@ const playerPhase = document.getElementById('player-phase');
 const playerHeadline = document.getElementById('player-headline');
 const playerDetail = document.getElementById('player-detail');
 const stepProgress = document.getElementById('step-progress');
-const primaryActionWrap = document.getElementById('play-again-wrap');
-const primaryActionButton = document.getElementById('play-again-btn');
+const playAgainWrap = document.getElementById('play-again-wrap');
 const observerPanel = document.getElementById('observer-panel');
 const observerToggle = document.getElementById('observer-toggle');
 const observerClose = document.getElementById('observer-close');
 
-let audioArmed = false;
 let lastGameState = null;
+let lastScore = null;
 
-async function armExperience() {
-  if (!audioArmed) {
-    audioArmed = true;
-    speech.enable();
-  }
-  await sounds.unlock();
-}
-
-async function playStartSound() {
-  try {
-    await armExperience();
-    const audio = new Audio(START_SOUND_PATH);
-    audio.volume = 0.7;
-    await audio.play();
-  } catch (error) {
-    console.debug('Start sound blocked:', error);
-  }
-}
+let lastSelectionId = null;
 
 async function postJson(url) {
   const response = await fetch(url, {
@@ -184,33 +69,19 @@ function setObserverHandlers() {
   });
 }
 
-async function startSession() {
-  await playStartSound();
-  try {
-    const result = await postJson('/api/start');
-    previewMessage.textContent = result.message;
-    pollStatus();
-  } catch (error) {
-    previewMessage.textContent = `Start failed: ${error.message}`;
-  }
-}
-
-async function restartGame() {
-  try {
-    await armExperience();
-    sounds.chime(true);
-    speech.say('Starting a new round.');
-    const result = await postJson('/api/restart_game');
-    previewMessage.textContent = result.message;
-    pollStatus();
-  } catch (error) {
-    previewMessage.textContent = `Restart failed: ${error.message}`;
-  }
-}
-
 function setButtonHandlers() {
-  document.getElementById('start-btn').addEventListener('click', () => {
-    startSession();
+  document.getElementById('start-btn').addEventListener('click', async () => {
+
+   playSound('sounds/Game_Start.mp3');
+
+
+    try {
+      const result = await postJson('/api/start');
+      previewMessage.textContent = result.message;
+      pollStatus();
+    } catch (error) {
+      previewMessage.textContent = `Start failed: ${error.message}`;
+    }
   });
 
   document.getElementById('end-btn').addEventListener('click', async () => {
@@ -223,20 +94,14 @@ function setButtonHandlers() {
     }
   });
 
-  primaryActionButton.addEventListener('click', async () => {
-    const action = primaryActionButton.dataset.action;
-    if (action === 'start') {
-      await startSession();
-      return;
-    }
-    if (action === 'restart') {
-      await restartGame();
+  document.getElementById('play-again-btn').addEventListener('click', async () => {
+    try {
+      await postJson('/api/restart_game');
+      pollStatus();
+    } catch (error) {
+      console.error('Restart failed:', error.message);
     }
   });
-}
-
-function hasRunningSession(processStatus) {
-  return Object.values(processStatus || {}).some((info) => Boolean(info && info.running));
 }
 
 function renderBlocks(blocks) {
@@ -290,14 +155,6 @@ function renderLog(entries) {
 }
 
 function renderPlayerMessage(data) {
-  if (data.session_starting) {
-    playerPhase.textContent = 'Starting';
-    playerHeadline.textContent = 'Starting the system';
-    playerDetail.textContent = data.bridge_message || 'Launching camera, vision, selection, motion, and game.';
-    playerStage.dataset.tone = 'active';
-    return;
-  }
-
   const message = data.player_message || {
     phase: 'Connecting',
     headline: 'Connecting to the game',
@@ -313,9 +170,17 @@ function renderPlayerMessage(data) {
 
 function renderSelection(selection) {
   if (selection) {
+
+    if (lastSelectionId !== selection.block_id) {
+      playSound('sounds/Player-Pick.mp3');
+      lastSelectionId = selection.block_id;
+    }
+
     const summary = `${selection.color} · id ${selection.block_id} · ${selection.selection_type} · conf ${selection.confidence}`;
+
     selectionValue.textContent = summary;
     selectionPlayerValue.textContent = `${selection.color} · id ${selection.block_id}`;
+
   } else {
     selectionValue.textContent = 'None';
     selectionPlayerValue.textContent = 'None';
@@ -325,127 +190,59 @@ function renderSelection(selection) {
 function renderProgress(gameState, progress) {
   const isPlayerTurn = gameState === 'WAITING_PLAYER';
   const parts = progress ? progress.split('/') : [];
-  const valid = parts.length === 2 && !Number.isNaN(Number(parts[0])) && !Number.isNaN(Number(parts[1]));
+  const valid = parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1]);
 
   if (isPlayerTurn && valid) {
-    const completed = parseInt(parts[0], 10);
+    const current = parseInt(parts[0], 10);
     const total = parseInt(parts[1], 10);
-    if (total > 0) {
-      const nextMove = Math.min(total, completed + 1);
-      stepProgress.textContent = completed >= total ? 'Sequence complete' : `Move ${nextMove} of ${total}`;
-      stepProgress.hidden = false;
-      return;
-    }
+    stepProgress.textContent = `Step ${current} of ${total}`;
+    stepProgress.hidden = false;
+  } else {
+    stepProgress.hidden = true;
   }
-
-  stepProgress.hidden = true;
 }
 
-function renderPrimaryAction(data) {
-  const running = hasRunningSession(data.process_status);
-  const starting = Boolean(data.session_starting);
-  const canRestart = running && (data.game_state === 'GAME_OVER' || data.game_state === 'MOTION_FAILED');
-
-  if (starting) {
-    primaryActionWrap.hidden = false;
-    primaryActionButton.hidden = false;
-    primaryActionButton.disabled = true;
-    primaryActionButton.dataset.action = 'starting';
-    primaryActionButton.textContent = 'Starting...';
-    return;
-  }
-
-  if (!running) {
-    primaryActionWrap.hidden = false;
-    primaryActionButton.hidden = false;
-    primaryActionButton.disabled = false;
-    primaryActionButton.dataset.action = 'start';
-    primaryActionButton.textContent = 'Start Game';
-    return;
-  }
-
-  if (canRestart) {
-    primaryActionWrap.hidden = false;
-    primaryActionButton.hidden = false;
-    primaryActionButton.disabled = false;
-    primaryActionButton.dataset.action = 'restart';
-    primaryActionButton.textContent = 'Play Again';
-    return;
-  }
-
-  primaryActionWrap.hidden = true;
-  primaryActionButton.dataset.action = '';
-  primaryActionButton.disabled = false;
-}
-
-function handleStateTransition(previousState, nextState, data) {
-  if (!audioArmed || previousState === nextState) {
-    return;
-  }
-
-  switch (nextState) {
-    case 'SHOWING_SEQUENCE':
-      sounds.chime(true);
-      speech.say('Watch the sequence.');
-      break;
-    case 'WAITING_PLAYER':
-      sounds.beep(880, 0.18, 'triangle', 0.14);
-      speech.say('Your turn.');
-      break;
-    case 'ROUND_PAUSE':
-      sounds.success();
-      speech.say('Correct.');
-      break;
-    case 'GAME_OVER':
-      sounds.chime(false);
-      speech.say(`Game over. Final score ${data.score ?? 0}.`);
-      break;
-    case 'MOTION_FAILED':
-      sounds.error();
-      speech.say('Motion needs attention.');
-      break;
-    case 'IDLE':
-      if (previousState && previousState !== 'UNKNOWN') {
-        speech.say('System ready.');
-      }
-      break;
-    default:
-      break;
-  }
+function renderPlayAgain(gameState) {
+  const show = gameState === 'GAME_OVER' || gameState === 'MOTION_FAILED';
+  playAgainWrap.hidden = !show;
 }
 
 function renderStatus(data) {
   const currentState = data.game_state || 'UNKNOWN';
+  const currentScore = data.score === null ? null : Number(data.score);
 
-  if (lastGameState !== null && currentState !== lastGameState) {
-    handleStateTransition(lastGameState, currentState, data);
+  if (lastScore !== null && currentScore !== null && currentScore > lastScore) {
+    if (currentScore >= 3) {
+      playSound('sounds/Level-Complete.mp3');
+    } else {
+      playSound('sounds/level-up.mp3');
+    }
   }
+
   lastGameState = currentState;
+  lastScore = currentScore;
 
   scoreValue.textContent = data.score === null ? '-' : String(data.score);
   blockCountValue.textContent = String(data.detected_block_count || 0);
-  stateValue.textContent = currentState;
+  stateValue.textContent = data.game_state || 'UNKNOWN';
   motionValue.textContent = data.motion_status || 'UNKNOWN';
   bridgeStatus.textContent = data.bridge_status || 'UNKNOWN';
   bridgeMessage.textContent = data.bridge_message || 'No bridge message.';
 
   renderPlayerMessage(data);
   renderSelection(data.player_selection);
-  renderProgress(currentState, data.player_progress || '');
-  renderPrimaryAction(data);
+  renderProgress(data.game_state, data.player_progress || '');
+  renderPlayAgain(data.game_state);
 
-  if (data.session_starting) {
-    statusRibbon.textContent = 'Session startup is in progress.';
-  } else {
-    statusRibbon.textContent = data.last_update
-      ? `Last system update: ${data.last_update}`
-      : 'Waiting for live ROS data.';
-  }
+  statusRibbon.textContent = data.last_update
+    ? `Last system update: ${data.last_update}`
+    : 'Waiting for live ROS data.';
 
   renderBlocks(data.detected_blocks || []);
   renderProcesses(data.process_status || {});
   renderLog(data.log || []);
 }
+
 
 async function pollStatus() {
   try {
