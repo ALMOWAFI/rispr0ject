@@ -465,6 +465,25 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
             }
             if (in_extra) continue;
 
+            // If we already have a fresh tracked position for this color, reject
+            // candidates that jumped too far from it — treat them as false positives
+            // and let the next-best candidate be tried. If none survive, no detection
+            // is published this frame and the previous position naturally expires
+            // after position_reset_timeout_sec, allowing a true re-lock afterwards.
+            auto fp_it = filtered_positions_.find(cfg.id);
+            if (fp_it != filtered_positions_.end() && max_position_jump_m_ > 0.0) {
+                const double dx = candidate_base.x - fp_it->second.x;
+                const double dy = candidate_base.y - fp_it->second.y;
+                const double dz = candidate_base.z - fp_it->second.z;
+                const double jump = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (jump > max_position_jump_m_) {
+                    ROS_WARN_THROTTLE(2.0,
+                                      "Rejected %s candidate: %.3fm jump from previous tracked position",
+                                      cfg.name.c_str(), jump);
+                    continue;
+                }
+            }
+
             p_base = applyEmaSmoothing(cfg.id, candidate_base, frame_stamp);
             chosen_centroid = candidate;
             chosen_area = det.areas[static_cast<size_t>(idx)];
