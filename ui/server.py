@@ -77,15 +77,15 @@ START_COMMANDS = OrderedDict({
         "-lc",
         "rosparam load config/game_params.yaml && rosrun memory_game player_selection.py __name:=player_selection",
     ],
-    "game": [
-        "bash",
-        "-lc",
-        "rosparam load config/game_params.yaml && rosrun memory_game game_node __name:=game_node",
-    ],
     "motion": [
         "bash",
         "-lc",
         "rosparam load config/game_params.yaml && rosrun memory_game motion_moveit_node __name:=motion_moveit_node _planning_group:=arm",
+    ],
+    "game": [
+        "bash",
+        "-lc",
+        "rosparam load config/game_params.yaml && rosrun memory_game game_node __name:=game_node",
     ],
 })
 
@@ -99,9 +99,9 @@ PROCESS_LABELS = {
 }
 
 # Before launching a process, wait until this ROS node is visible in rosnode list.
-# This prevents motion from starting before game_node is fully registered.
+# The game publishes /target_sequence immediately, so motion must be subscribed first.
 LAUNCH_DEPENDENCIES: Dict[str, str] = {
-    "motion": "/game_node",
+    "game": "/motion_moveit_node",
 }
 DEPENDENCY_TIMEOUT_SEC = 40.0
 
@@ -579,7 +579,10 @@ class UiHandler(SimpleHTTPRequestHandler):
             self.process_manager.refresh_state()
             self._write_json(self.bridge_state.snapshot())
             return
-        return super().do_GET()
+        try:
+            return super().do_GET()
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def do_POST(self):
         if self.path == "/api/start":
