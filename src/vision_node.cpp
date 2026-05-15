@@ -396,18 +396,7 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
             continue;
         }
 
-        bool dropped_far_candidates = false;
-        const std::vector<int> ranked_indices =
-            rankCandidateIndices(cfg.id, det, frame_stamp, &dropped_far_candidates);
-        if (ranked_indices.empty()) {
-            if (dropped_far_candidates) {
-                ROS_WARN_THROTTLE(2.0,
-                                  "Dropped %s candidates: no contour stayed near the recent track",
-                                  cfg.name.c_str());
-            }
-            continue;
-        }
-
+        const std::vector<int> ranked_indices = rankCandidateIndices(cfg.id, det, frame_stamp);
         geometry_msgs::Point p_base;
         cv::Point chosen_centroid;
         double chosen_area = 0.0;
@@ -436,16 +425,6 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
                 ROS_WARN_THROTTLE(2.0, "Rejected %s block: non-finite 3D position (%.3f, %.3f, %.3f)",
                                   cfg.name.c_str(),
                                   candidate_base.x, candidate_base.y, candidate_base.z);
-                continue;
-            }
-
-            double position_jump_m = 0.0;
-            if (violatesRecentPositionTrack(cfg.id, candidate_base, frame_stamp, position_jump_m)) {
-                ROS_WARN_THROTTLE(2.0,
-                                  "Rejected %s block at (%.3f, %.3f, %.3f): jumped %.3fm from recent track",
-                                  cfg.name.c_str(),
-                                  candidate_base.x, candidate_base.y, candidate_base.z,
-                                  position_jump_m);
                 continue;
             }
 
@@ -751,12 +730,7 @@ bool projectAndTransformToBase(int u,
 
 std::vector<int> rankCandidateIndices(int block_id,
                                       const DetectionResult& det,
-                                      const ros::Time& stamp,
-                                      bool* dropped_far_candidates) const {
-    if (dropped_far_candidates) {
-        *dropped_far_candidates = false;
-    }
-
+                                      const ros::Time& stamp) const {
     std::vector<int> indices(det.centroids.size());
     for (size_t i = 0; i < indices.size(); ++i) {
         indices[i] = static_cast<int>(i);
@@ -785,10 +759,7 @@ std::vector<int> rankCandidateIndices(int block_id,
     }
 
     if (!have_nearby_candidate) {
-        if (dropped_far_candidates) {
-            *dropped_far_candidates = true;
-        }
-        return {};
+        return indices;
     }
 
     std::stable_sort(indices.begin(), indices.end(),
@@ -841,33 +812,6 @@ void pruneTrackingState(const ros::Time& now) {
             }
         }
     }
-}
-
-bool violatesRecentPositionTrack(int block_id,
-                               const geometry_msgs::Point& current,
-                               const ros::Time& stamp,
-                               double& jump_m) const {
-    jump_m = 0.0;
-    if (max_position_jump_m_ <= 0.0 || position_reset_timeout_sec_ <= 0.0) {
-        return false;
-    }
-
-    auto it = filtered_positions_.find(block_id);
-    auto time_it = filtered_position_times_.find(block_id);
-    if (it == filtered_positions_.end() || time_it == filtered_position_times_.end()) {
-        return false;
-    }
-
-    const double age_sec = (stamp - time_it->second).toSec();
-    if (age_sec > position_reset_timeout_sec_) {
-        return false;
-    }
-
-    const double dx = current.x - it->second.x;
-    const double dy = current.y - it->second.y;
-    const double dz = current.z - it->second.z;
-    jump_m = std::sqrt(dx * dx + dy * dy + dz * dz);
-    return jump_m > max_position_jump_m_;
 }
 
 geometry_msgs::Point applyEmaSmoothing(int block_id,
