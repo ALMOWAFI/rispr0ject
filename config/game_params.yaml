@@ -60,15 +60,15 @@ vision_node:
 
   base_exclusion_radius_m: 0.20
 
-  # Table workspace in panda_link0. This constrains vision to the real play area
-  # instead of using ad-hoc spherical corner masks.
+  # Table workspace in panda_link0. Keep this broad enough for the observed lab
+  # block positions while still rejecting impossible far-away detections.
   workspace_enable: true
-  workspace_min_x: 0.00
-  workspace_max_x: 0.60
-  workspace_min_y: -0.16
-  workspace_max_y: 0.60
+  workspace_min_x: -0.20
+  workspace_max_x: 0.80
+  workspace_min_y: -0.30
+  workspace_max_y: 0.90
   workspace_min_z: -0.08
-  workspace_max_z: 0.10
+  workspace_max_z: 0.20
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
