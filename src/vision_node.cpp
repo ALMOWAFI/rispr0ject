@@ -791,6 +791,24 @@ std::vector<int> rankCandidateIndices(int block_id,
         return {};
     }
 
+    indices.erase(
+        std::remove_if(indices.begin(), indices.end(),
+                       [&](int idx) {
+                           const cv::Point& p = det.centroids[static_cast<size_t>(idx)];
+                           const double dx = static_cast<double>(p.x) - previous.x;
+                           const double dy = static_cast<double>(p.y) - previous.y;
+                           const double dist = std::sqrt(dx * dx + dy * dy);
+                           return dist > max_candidate_jump_px_;
+                       }),
+        indices.end());
+
+    if (indices.empty()) {
+        if (dropped_far_candidates) {
+            *dropped_far_candidates = true;
+        }
+        return {};
+    }
+
     std::stable_sort(indices.begin(), indices.end(),
                      [&](int a, int b) {
                          const cv::Point& pa = det.centroids[static_cast<size_t>(a)];
@@ -801,11 +819,6 @@ std::vector<int> rankCandidateIndices(int block_id,
                          const double dyb = static_cast<double>(pb.y) - previous.y;
                          const double dist_a = std::sqrt(dxa * dxa + dya * dya);
                          const double dist_b = std::sqrt(dxb * dxb + dyb * dyb);
-                         const bool near_a = dist_a <= max_candidate_jump_px_;
-                         const bool near_b = dist_b <= max_candidate_jump_px_;
-                         if (near_a != near_b) {
-                             return near_a;
-                         }
                          if (std::fabs(dist_a - dist_b) > 1e-6) {
                              return dist_a < dist_b;
                          }
