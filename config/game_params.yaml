@@ -45,14 +45,6 @@ vision_node:
   
   disable_red: true
   enable_debug_images: true
-
-  # Normalized image-space ROI for the table/play area.
-  # Fractions are relative to image width/height and are drawn on the debug overlay.
-  roi_enable: true
-  roi_x_min_frac: 0.05
-  roi_x_max_frac: 0.95
-  roi_y_min_frac: 0.08
-  roi_y_max_frac: 0.92
   
   blur_kernel_size: 3
   

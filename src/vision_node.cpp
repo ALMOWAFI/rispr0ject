@@ -114,12 +114,6 @@ void loadParams() {
     pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
     pnh_.param("disable_red", disable_red_, true);
 
-    pnh_.param("roi_enable", roi_enable_, true);
-    pnh_.param("roi_x_min_frac", roi_x_min_frac_, 0.05);
-    pnh_.param("roi_x_max_frac", roi_x_max_frac_, 0.95);
-    pnh_.param("roi_y_min_frac", roi_y_min_frac_, 0.08);
-    pnh_.param("roi_y_max_frac", roi_y_max_frac_, 0.92);
-
     pnh_.param("blur_kernel_size", blur_kernel_size_, 3);
     if (blur_kernel_size_ > 0 && blur_kernel_size_ % 2 == 0) {
         blur_kernel_size_++;  // OpenCV requires odd kernel size
@@ -153,12 +147,6 @@ void loadParams() {
 
     if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
     if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
-    roi_x_min_frac_ = std::max(0.0, std::min(1.0, roi_x_min_frac_));
-    roi_x_max_frac_ = std::max(0.0, std::min(1.0, roi_x_max_frac_));
-    roi_y_min_frac_ = std::max(0.0, std::min(1.0, roi_y_min_frac_));
-    roi_y_max_frac_ = std::max(0.0, std::min(1.0, roi_y_max_frac_));
-    if (roi_x_max_frac_ < roi_x_min_frac_) std::swap(roi_x_min_frac_, roi_x_max_frac_);
-    if (roi_y_max_frac_ < roi_y_min_frac_) std::swap(roi_y_min_frac_, roi_y_max_frac_);
     if (depth_window_radius_ < 0) depth_window_radius_ = 0;
     depth_buffer_size_ = std::max(2, depth_buffer_size_);
     smoothing_alpha_ = std::max(0.0, std::min(1.0, smoothing_alpha_));
@@ -268,39 +256,6 @@ void loadExtraExclusionsFromParams() {
             static_cast<double>(z["z"]),
             static_cast<double>(z["radius"])});
     }
-}
-
-bool computeRoiRect(const cv::Size& size, cv::Rect& roi) const {
-    if (!roi_enable_) {
-        return false;
-    }
-
-    const int x1 = std::max(0, std::min(size.width - 1,
-        static_cast<int>(std::round(roi_x_min_frac_ * static_cast<double>(size.width)))));
-    const int x2 = std::max(0, std::min(size.width,
-        static_cast<int>(std::round(roi_x_max_frac_ * static_cast<double>(size.width)))));
-    const int y1 = std::max(0, std::min(size.height - 1,
-        static_cast<int>(std::round(roi_y_min_frac_ * static_cast<double>(size.height)))));
-    const int y2 = std::max(0, std::min(size.height,
-        static_cast<int>(std::round(roi_y_max_frac_ * static_cast<double>(size.height)))));
-
-    if (x2 <= x1 || y2 <= y1) {
-        return false;
-    }
-
-    roi = cv::Rect(x1, y1, x2 - x1, y2 - y1);
-    return roi.width > 0 && roi.height > 0;
-}
-
-void applyRoiMask(cv::Mat& mask) const {
-    cv::Rect roi;
-    if (!computeRoiRect(mask.size(), roi)) {
-        return;
-    }
-
-    cv::Mat cropped = cv::Mat::zeros(mask.size(), mask.type());
-    mask(roi).copyTo(cropped(roi));
-    mask = cropped;
 }
 
 void cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg) {
@@ -429,10 +384,6 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
     if (publish_debug_images) {
         debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
         debug_overlay = cv_ptr->image.clone();
-        cv::Rect roi;
-        if (computeRoiRect(hsv.size(), roi)) {
-            cv::rectangle(debug_overlay, roi, cv::Scalar(255, 255, 255), 2);
-        }
     }
 
     for (const ColorConfig& cfg : color_configs_) {
@@ -604,7 +555,6 @@ DetectionResult detectColorBlob(const cv::Mat& hsv,
                     partial);
         cv::bitwise_or(mask, partial, mask);
     }
-    applyRoiMask(mask);
     // CLOSE first: fills glare spots, shadows, and occlusion holes inside the block.
     //    Doing open first would erode a block with a hole into two fragments, then fail area filter.
     if (mask_close_iterations_ > 0) {
@@ -947,11 +897,6 @@ std::string depth_topic_;
 std::string camera_info_topic_;
 std::string target_frame_;
 bool disable_red_ = false;
-bool roi_enable_ = true;
-double roi_x_min_frac_ = 0.05;
-double roi_x_max_frac_ = 0.95;
-double roi_y_min_frac_ = 0.08;
-double roi_y_max_frac_ = 0.92;
 
 int blur_kernel_size_ = 3;
 double min_block_area_;
