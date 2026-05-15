@@ -71,7 +71,7 @@ class MotionMoveItNode {
 
     pnh_.param("planning_time", planning_time_, 5.0);
     pnh_.param("max_plan_retries", max_plan_retries_, 3);
-    pnh_.param("use_ik_joint_targets", use_ik_joint_targets_, true);
+    pnh_.param("use_ik_joint_targets", use_ik_joint_targets_, false);
     pnh_.param("fallback_pose_target_on_ik_failure",
                fallback_pose_target_on_ik_failure_,
                true);
@@ -97,7 +97,7 @@ class MotionMoveItNode {
 
     pnh_.param("indicate_hold_sec", indicate_hold_sec_, 0.20);
     pnh_.param("strict_pointing", strict_pointing_, false);
-    pnh_.param("close_gripper_for_pointing", close_gripper_for_pointing_, true);
+    pnh_.param("close_gripper_for_pointing", close_gripper_for_pointing_, false);
     pnh_.param("gripper_action_name", gripper_action_name_, std::string("/franka_gripper/move"));
     pnh_.param("gripper_closed_width", gripper_closed_width_, 0.0);
     pnh_.param("gripper_speed", gripper_speed_, 0.06);
@@ -778,7 +778,7 @@ class MotionMoveItNode {
 
   double planning_time_ = 5.0;
   int max_plan_retries_ = 3;
-  bool use_ik_joint_targets_ = true;
+  bool use_ik_joint_targets_ = false;
   bool fallback_pose_target_on_ik_failure_ = true;
   double ik_timeout_ = 0.15;
 
@@ -800,7 +800,7 @@ class MotionMoveItNode {
 
   double indicate_hold_sec_ = 0.20;
   bool strict_pointing_ = false;
-  bool close_gripper_for_pointing_ = true;
+  bool close_gripper_for_pointing_ = false;
   std::string gripper_action_name_ = "/franka_gripper/move";
   double gripper_closed_width_ = 0.0;
   double gripper_speed_ = 0.06;
