@@ -50,12 +50,15 @@ vision_node:
 
   base_exclusion_radius_m: 0.20
 
-  # Spherical zones in `target_frame` (panda_link0) where detections are rejected.
-  # Use this to mask persistent false positives (e.g., a yellow box in the corner).
-  # Each entry: { x, y, z, radius } in meters.
-  extra_exclusions:
-    - { x: 0.65, y: -0.20, z: 0.0, radius: 0.25 }   # behind blue "corner"
-    - { x: 0.65, y: 0.40,  z: 0.0, radius: 0.25 }   # behind green "edge"
+  # Table workspace in panda_link0. This constrains vision to the real play area
+  # instead of using ad-hoc spherical corner masks.
+  workspace_enable: true
+  workspace_min_x: 0.00
+  workspace_max_x: 0.60
+  workspace_min_y: -0.16
+  workspace_max_y: 0.60
+  workspace_min_z: -0.08
+  workspace_max_z: 0.10
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
