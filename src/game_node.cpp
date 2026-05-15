@@ -514,6 +514,15 @@ private:
         return true;
     }
 
+    bool motionReadyForSequence() const {
+        if (motion_sub_.getNumPublishers() == 0 || !have_motion_state_) {
+            return false;
+        }
+
+        const MotionStatus status = parseMotionStatus(last_motion_state_);
+        return status.state == "IDLE";
+    }
+
     void playerTimeoutCallback(const ros::TimerEvent&) {
         if (current_state_ != GameState::WAITING_PLAYER) {
             return;
@@ -593,6 +602,35 @@ private:
         if (!active_sequence_msg_valid_ && require_detected_blocks_ && !haveSequenceTargets()) {
             refreshAvailableBlocksFromDetections();
             waitForBlocksAndRetry("Sequence target missing.");
+            return;
+        }
+
+        if (!motionReadyForSequence()) {
+            const ros::Time now = ros::Time::now();
+            if (target_sub_wait_start_.isZero()) {
+                target_sub_wait_start_ = now;
+            }
+
+            const double waited_sec = (now - target_sub_wait_start_).toSec();
+            if (waited_sec > target_subscriber_timeout_sec_) {
+                ROS_ERROR("Motion node did not report ready after %.1fs", waited_sec);
+                abortDueToMotionFailure();
+                return;
+            }
+
+            const std::string last_status = have_motion_state_ ? last_motion_state_ : "none";
+            ROS_WARN_THROTTLE(2.0,
+                              "Waiting for motion node to report IDLE (%u publishers, last status: %s, %.1fs/%.1fs)",
+                              motion_sub_.getNumPublishers(),
+                              last_status.c_str(),
+                              waited_sec,
+                              target_subscriber_timeout_sec_);
+            publishState("WAITING_FOR_MOTION");
+            target_sub_wait_timer_ = nh_.createTimer(
+                ros::Duration(target_subscriber_poll_sec_),
+                &GameNode::targetSubWaitCallback,
+                this,
+                true);
             return;
         }
 
