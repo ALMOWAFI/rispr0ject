@@ -16,10 +16,12 @@ game_node:
   block_freshness_sec: 0.20
   motion_timeout_per_target_sec: 15.0
   motion_timeout_padding_sec: 2.0
+  motion_retry_limit: 1
+  motion_retry_delay_sec: 0.75
   
   target_frame: "panda_link0"
   target_subscriber_poll_sec: 0.2
-  target_subscriber_timeout_sec: 5.0
+  target_subscriber_timeout_sec: 15.0
   
   default_x: 0.40
   default_y: 0.00
@@ -103,6 +105,9 @@ motion_moveit_node:
   max_acceleration_scaling: 0.05
   point_velocity_scaling: 0.05
   point_acceleration_scaling: 0.03
+  use_ik_joint_targets: true
+  fallback_pose_target_on_ik_failure: true
+  ik_timeout: 0.15
   min_hover_z: 0.30
   hover_clearance_z: 0.24
   stage_hover_motion: false

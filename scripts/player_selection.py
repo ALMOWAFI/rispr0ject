@@ -50,6 +50,8 @@ class PlayerSelectionNode:
         
         self.baseline_candidate_since = rospy.Time(0)
         self.last_selection_time = rospy.Time(0)
+        self.reset_delay_sec = float(rospy.get_param("~reset_delay_sec", 3.0))
+        self.all_blocks_missing_since = rospy.Time(0)
         
         self.latest_observed: Dict[int, object] = {}
         self.latest_observed_stamp = rospy.Time(0)

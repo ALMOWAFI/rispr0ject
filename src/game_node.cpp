@@ -50,6 +50,7 @@ private:
     ros::Timer round_timer_;
     ros::Timer player_timeout_timer_;
     ros::Timer target_sub_wait_timer_;
+    ros::Timer motion_retry_timer_;
 
     GameState current_state_;
 
@@ -85,6 +86,8 @@ private:
     double target_subscriber_timeout_sec_;
     double motion_timeout_per_target_sec_;
     double motion_timeout_padding_sec_;
+    int motion_retry_limit_;
+    double motion_retry_delay_sec_;
 
     geometry_msgs::Point default_target_;
     std::string target_frame_;
@@ -94,6 +97,9 @@ private:
     ros::Time target_sub_wait_start_;
     uint32_t next_sequence_id_;
     uint32_t active_sequence_id_;
+    memory_game::BlockSequence active_sequence_msg_;
+    bool active_sequence_msg_valid_;
+    int motion_retry_count_;
 
 public:
     GameNode()
@@ -109,7 +115,9 @@ public:
           sequence_sent_to_motion_(false),
           sequence_targets_completed_(0),
           next_sequence_id_(1),
-          active_sequence_id_(0) {
+          active_sequence_id_(0),
+          active_sequence_msg_valid_(false),
+          motion_retry_count_(0) {
         loadParams();
 
         blocks_sub_ = nh_.subscribe("/detected_blocks", 10, &GameNode::blocksCallback, this);
@@ -155,6 +163,8 @@ private:
         pnh_.param("target_subscriber_timeout_sec", target_subscriber_timeout_sec_, 5.0);
         pnh_.param("motion_timeout_per_target_sec", motion_timeout_per_target_sec_, 15.0);
         pnh_.param("motion_timeout_padding_sec", motion_timeout_padding_sec_, 2.0);
+        pnh_.param("motion_retry_limit", motion_retry_limit_, 1);
+        pnh_.param("motion_retry_delay_sec", motion_retry_delay_sec_, 0.75);
 
         pnh_.param("default_x", default_target_.x, 0.40);
         pnh_.param("default_y", default_target_.y, 0.00);
@@ -179,6 +189,8 @@ private:
         target_subscriber_timeout_sec_ = std::max(0.0, target_subscriber_timeout_sec_);
         motion_timeout_per_target_sec_ = std::max(1.0, motion_timeout_per_target_sec_);
         motion_timeout_padding_sec_ = std::max(0.0, motion_timeout_padding_sec_);
+        motion_retry_limit_ = std::max(0, motion_retry_limit_);
+        motion_retry_delay_sec_ = std::max(0.0, motion_retry_delay_sec_);
 
         available_block_ids_.clear();
         for (int id = 0; id < num_blocks_; ++id) {
@@ -329,11 +341,11 @@ private:
 
         if (status.state == "MOVE_FAILED") {
             if (status.has_block_id) {
-                ROS_ERROR("Motion reported failure while executing block %d", status.block_id);
+                scheduleMotionRetryOrAbort("Motion reported failure while executing block " +
+                                           std::to_string(status.block_id));
             } else {
-                ROS_ERROR("Motion reported sequence failure");
+                scheduleMotionRetryOrAbort("Motion reported sequence failure");
             }
-            abortDueToMotionFailure();
             return;
         }
 
@@ -374,9 +386,9 @@ private:
             motion_started_for_sequence_ = false;
 
             if (sequence_targets_completed_ < static_cast<int>(sequence_.size())) {
-                ROS_ERROR("Motion returned to IDLE after only %d/%zu targets",
-                          sequence_targets_completed_, sequence_.size());
-                abortDueToMotionFailure();
+                scheduleMotionRetryOrAbort("Motion returned to IDLE after only " +
+                                           std::to_string(sequence_targets_completed_) + "/" +
+                                           std::to_string(sequence_.size()) + " targets");
                 return;
             }
 
@@ -430,17 +442,51 @@ private:
         sendSequenceToMotion();
     }
 
+    void motionRetryCallback(const ros::TimerEvent&) {
+        sendSequenceToMotion();
+    }
+
     void abortDueToMotionFailure() {
         waiting_for_motion_ = false;
         motion_started_for_sequence_ = false;
         sequence_targets_completed_ = 0;
+        sequence_sent_to_motion_ = false;
         show_failsafe_timer_.stop();
         target_sub_wait_timer_.stop();
+        motion_retry_timer_.stop();
         player_timeout_timer_.stop();
         round_timer_.stop();
         current_state_ = GameState::MOTION_FAILED;
         ROS_ERROR("Motion failed while showing the sequence. Aborting round.");
         publishState("MOTION_FAILED");
+    }
+
+    void scheduleMotionRetryOrAbort(const std::string& reason) {
+        show_failsafe_timer_.stop();
+
+        if (motion_retry_count_ >= motion_retry_limit_ || !active_sequence_msg_valid_) {
+            ROS_ERROR("%s. Retry budget exhausted or no frozen sequence is available.", reason.c_str());
+            abortDueToMotionFailure();
+            return;
+        }
+
+        ++motion_retry_count_;
+        waiting_for_motion_ = false;
+        motion_started_for_sequence_ = false;
+        sequence_targets_completed_ = 0;
+        sequence_sent_to_motion_ = false;
+
+        ROS_WARN("%s. Retrying frozen sequence %u (%d/%d).",
+                 reason.c_str(),
+                 active_sequence_id_,
+                 motion_retry_count_,
+                 motion_retry_limit_);
+        publishState("WAITING_FOR_MOTION");
+        motion_retry_timer_ = nh_.createTimer(
+            ros::Duration(motion_retry_delay_sec_),
+            &GameNode::motionRetryCallback,
+            this,
+            true);
     }
 
     void waitForBlocksAndRetry(const std::string& reason) {
@@ -506,8 +552,11 @@ private:
         sequence_targets_completed_ = 0;
         sequence_sent_to_motion_ = false;
         target_sub_wait_start_ = ros::Time(0);
+        active_sequence_msg_valid_ = false;
+        motion_retry_count_ = 0;
         show_failsafe_timer_.stop();
         target_sub_wait_timer_.stop();
+        motion_retry_timer_.stop();
         active_sequence_id_ = next_sequence_id_++;
 
         const int sequence_length = base_length_ + length_per_level_ * (level_ - 1);
@@ -541,7 +590,7 @@ private:
             return;
         }
 
-        if (require_detected_blocks_ && !haveSequenceTargets()) {
+        if (!active_sequence_msg_valid_ && require_detected_blocks_ && !haveSequenceTargets()) {
             refreshAvailableBlocksFromDetections();
             waitForBlocksAndRetry("Sequence target missing.");
             return;
@@ -571,27 +620,33 @@ private:
             return;
         }
 
-        memory_game::BlockSequence msg;
-        msg.header.stamp = ros::Time::now();
-        msg.header.frame_id = target_frame_;
-        msg.sequence_id = active_sequence_id_;
-        msg.blocks.reserve(sequence_.size());
+        if (!active_sequence_msg_valid_) {
+            active_sequence_msg_ = memory_game::BlockSequence();
+            active_sequence_msg_.header.frame_id = target_frame_;
+            active_sequence_msg_.sequence_id = active_sequence_id_;
+            active_sequence_msg_.blocks.reserve(sequence_.size());
 
-        for (const int block_id : sequence_) {
-            memory_game::Block target;
-            if (!tryMakeTargetBlock(block_id, target)) {
-                waitForBlocksAndRetry("Sequence target missing while building sequence.");
-                return;
+            for (const int block_id : sequence_) {
+                memory_game::Block target;
+                if (!tryMakeTargetBlock(block_id, target)) {
+                    waitForBlocksAndRetry("Sequence target missing while building sequence.");
+                    return;
+                }
+                active_sequence_msg_.blocks.push_back(target);
             }
-            msg.blocks.push_back(target);
+
+            active_sequence_msg_valid_ = true;
         }
 
+        active_sequence_msg_.header.stamp = ros::Time::now();
         waiting_for_motion_ = true;
         motion_started_for_sequence_ = false;
         sequence_sent_to_motion_ = true;
 
-        target_sequence_pub_.publish(msg);
-        ROS_INFO("Dispatched sequence %u with %zu targets", active_sequence_id_, msg.blocks.size());
+        target_sequence_pub_.publish(active_sequence_msg_);
+        ROS_INFO("Dispatched sequence %u with %zu frozen targets",
+                 active_sequence_id_,
+                 active_sequence_msg_.blocks.size());
 
         if (!have_motion_state_) {
             ROS_WARN("No /motion_status received yet. Is motion node running?");
@@ -659,6 +714,7 @@ private:
         show_failsafe_timer_.stop();
         round_timer_.stop();
         target_sub_wait_timer_.stop();
+        motion_retry_timer_.stop();
     }
 
     void resetPlayerTimeout() {

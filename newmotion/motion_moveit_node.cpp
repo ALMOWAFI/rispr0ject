@@ -12,6 +12,7 @@
 // This intentionally avoids computeCartesianPath(), because the Panda lab setup
 // was smoother and more reliable with standard MoveIt planned motions.
 
+#include <algorithm>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -61,6 +62,11 @@ class MotionMoveItNode {
 
     pnh_.param("planning_time", planning_time_, 5.0);
     pnh_.param("max_plan_retries", max_plan_retries_, 3);
+    pnh_.param("use_ik_joint_targets", use_ik_joint_targets_, true);
+    pnh_.param("fallback_pose_target_on_ik_failure",
+               fallback_pose_target_on_ik_failure_,
+               true);
+    pnh_.param("ik_timeout", ik_timeout_, 0.15);
 
     pnh_.param("max_velocity_scaling", max_velocity_scaling_, 0.08);
     pnh_.param("max_acceleration_scaling", max_acceleration_scaling_, 0.05);
@@ -453,7 +459,22 @@ class MotionMoveItNode {
 
     for (int attempt = 1; attempt <= max_plan_retries_; ++attempt) {
       move_group_->setStartStateToCurrentState();
-      move_group_->setPoseTarget(target_pose);
+      move_group_->clearPoseTargets();
+
+      bool using_pose_target = false;
+      std::vector<double> joint_target;
+      if (use_ik_joint_targets_ &&
+          computeIkJointTarget(target_pose, block_id, label, &joint_target)) {
+        move_group_->setJointValueTarget(joint_target);
+      } else {
+        if (use_ik_joint_targets_ && !fallback_pose_target_on_ik_failure_) {
+          ROS_WARN("%s IK target failed for block %d and pose fallback is disabled",
+                   label.c_str(), block_id);
+          continue;
+        }
+        using_pose_target = true;
+        move_group_->setPoseTarget(target_pose);
+      }
 
       moveit::planning_interface::MoveGroupInterface::Plan plan;
       const bool planned =
@@ -472,7 +493,9 @@ class MotionMoveItNode {
           (move_group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
       move_group_->stop();
-      move_group_->clearPoseTargets();
+      if (using_pose_target) {
+        move_group_->clearPoseTargets();
+      }
 
       if (executed) {
         return true;
@@ -486,6 +509,78 @@ class MotionMoveItNode {
     }
 
     return false;
+  }
+
+  bool computeIkJointTarget(const geometry_msgs::Pose& target_pose,
+                            int block_id,
+                            const std::string& label,
+                            std::vector<double>* joint_target) {
+    if (!joint_target) {
+      return false;
+    }
+
+    auto current_state = move_group_->getCurrentState();
+    if (!current_state) {
+      ROS_WARN("%s IK skipped for block %d: current robot state unavailable",
+               label.c_str(), block_id);
+      return false;
+    }
+
+    const moveit::core::JointModelGroup* joint_model_group =
+        current_state->getJointModelGroup(planning_group_);
+    if (!joint_model_group) {
+      ROS_WARN("%s IK skipped for block %d: joint model group %s unavailable",
+               label.c_str(), block_id, planning_group_.c_str());
+      return false;
+    }
+
+    std::string end_effector_link = move_group_->getEndEffectorLink();
+    if (end_effector_link.empty()) {
+      const std::vector<std::string>& link_names = move_group_->getLinkNames();
+      if (!link_names.empty()) {
+        end_effector_link = link_names.back();
+      }
+    }
+
+    if (end_effector_link.empty()) {
+      ROS_WARN("%s IK skipped for block %d: end-effector link unavailable",
+               label.c_str(), block_id);
+      return false;
+    }
+
+    Eigen::Quaterniond target_q(target_pose.orientation.w,
+                                target_pose.orientation.x,
+                                target_pose.orientation.y,
+                                target_pose.orientation.z);
+    if (target_q.norm() < 1e-6) {
+      ROS_WARN("%s IK skipped for block %d: target orientation is invalid",
+               label.c_str(), block_id);
+      return false;
+    }
+    target_q.normalize();
+
+    Eigen::Isometry3d target_eigen = Eigen::Isometry3d::Identity();
+    target_eigen.translation() =
+        Eigen::Vector3d(target_pose.position.x,
+                        target_pose.position.y,
+                        target_pose.position.z);
+    target_eigen.linear() = target_q.toRotationMatrix();
+
+    moveit::core::RobotState ik_state(*current_state);
+    const bool ik_solved = ik_state.setFromIK(joint_model_group,
+                                              target_eigen,
+                                              end_effector_link,
+                                              ik_timeout_);
+
+    if (!ik_solved) {
+      ROS_WARN("%s IK failed for block %d target %s",
+               label.c_str(), block_id, poseToString(target_pose).c_str());
+      return false;
+    }
+
+    joint_target->clear();
+    ik_state.copyJointGroupPositions(joint_model_group, *joint_target);
+    return !joint_target->empty();
   }
 
   bool returnHome() {
@@ -618,6 +713,9 @@ class MotionMoveItNode {
 
   double planning_time_ = 5.0;
   int max_plan_retries_ = 3;
+  bool use_ik_joint_targets_ = true;
+  bool fallback_pose_target_on_ik_failure_ = true;
+  double ik_timeout_ = 0.15;
 
   double max_velocity_scaling_ = 0.08;
   double max_acceleration_scaling_ = 0.05;
