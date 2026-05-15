@@ -127,6 +127,12 @@ motion_moveit_node:
   indicate_hold_sec: 0.20
   max_plan_retries: 3
   strict_pointing: false
+  close_gripper_for_pointing: true
+  gripper_action_name: "/franka_gripper/move"
+  gripper_closed_width: 0.0
+  gripper_speed: 0.06
+  gripper_wait_timeout_sec: 0.25
+  gripper_result_timeout_sec: 2.5
   return_home: true
   use_current_state_as_home: true
   keep_current_orientation: false

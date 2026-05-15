@@ -34,6 +34,15 @@
 #include <ros/ros.h>
 #include <std_msgs/String.h>
 
+#ifndef MEMORY_GAME_HAS_FRANKA_GRIPPER
+#define MEMORY_GAME_HAS_FRANKA_GRIPPER 0
+#endif
+
+#if MEMORY_GAME_HAS_FRANKA_GRIPPER
+#include <actionlib/client/simple_action_client.h>
+#include <franka_gripper/MoveAction.h>
+#endif
+
 namespace {
 
 void PublishStatus(ros::Publisher& pub,
@@ -88,6 +97,12 @@ class MotionMoveItNode {
 
     pnh_.param("indicate_hold_sec", indicate_hold_sec_, 0.20);
     pnh_.param("strict_pointing", strict_pointing_, false);
+    pnh_.param("close_gripper_for_pointing", close_gripper_for_pointing_, true);
+    pnh_.param("gripper_action_name", gripper_action_name_, std::string("/franka_gripper/move"));
+    pnh_.param("gripper_closed_width", gripper_closed_width_, 0.0);
+    pnh_.param("gripper_speed", gripper_speed_, 0.06);
+    pnh_.param("gripper_wait_timeout_sec", gripper_wait_timeout_sec_, 0.25);
+    pnh_.param("gripper_result_timeout_sec", gripper_result_timeout_sec_, 2.5);
 
     pnh_.param("return_home", return_home_, true);
     pnh_.param("use_current_state_as_home", use_current_state_as_home_, true);
@@ -258,6 +273,7 @@ class MotionMoveItNode {
 
     bool point_succeeded = false;
     PublishStatus(status_pub_, "POINTING", static_cast<int>(sequence_id), block.id);
+    closeGripperForPointing();
     if (moveToPoseWithRetries(point_pose,
                               point_velocity_scaling_,
                               point_acceleration_scaling_,
@@ -583,6 +599,55 @@ class MotionMoveItNode {
     return !joint_target->empty();
   }
 
+  void closeGripperForPointing() {
+    if (!close_gripper_for_pointing_ || gripper_closed_for_pointing_ || gripper_close_disabled_) {
+      return;
+    }
+
+#if MEMORY_GAME_HAS_FRANKA_GRIPPER
+    if (!gripper_client_) {
+      gripper_client_ =
+          std::make_unique<actionlib::SimpleActionClient<franka_gripper::MoveAction>>(
+              gripper_action_name_, true);
+    }
+
+    if (!gripper_client_->waitForServer(ros::Duration(gripper_wait_timeout_sec_))) {
+      ROS_WARN("Gripper action %s unavailable; continuing without closing gripper",
+               gripper_action_name_.c_str());
+      gripper_close_disabled_ = true;
+      return;
+    }
+
+    franka_gripper::MoveGoal goal;
+    goal.width = gripper_closed_width_;
+    goal.speed = gripper_speed_;
+
+    ROS_INFO("Closing gripper for pointing: width=%.3f speed=%.3f",
+             goal.width, goal.speed);
+    gripper_client_->sendGoal(goal);
+    if (!gripper_client_->waitForResult(ros::Duration(gripper_result_timeout_sec_))) {
+      gripper_client_->cancelGoal();
+      ROS_WARN("Timed out while closing gripper for pointing; continuing motion");
+      gripper_close_disabled_ = true;
+      return;
+    }
+
+    const actionlib::SimpleClientGoalState state = gripper_client_->getState();
+    if (state == actionlib::SimpleClientGoalState::SUCCEEDED) {
+      gripper_closed_for_pointing_ = true;
+      ROS_INFO("Gripper closed for pointing");
+      return;
+    }
+
+    ROS_WARN("Gripper close command finished with state %s; continuing motion",
+             state.toString().c_str());
+    gripper_close_disabled_ = true;
+#else
+    ROS_WARN_ONCE("motion_moveit_node was built without franka_gripper; gripper close is disabled");
+    gripper_close_disabled_ = true;
+#endif
+  }
+
   bool returnHome() {
     if (!move_group_) {
       return false;
@@ -735,6 +800,17 @@ class MotionMoveItNode {
 
   double indicate_hold_sec_ = 0.20;
   bool strict_pointing_ = false;
+  bool close_gripper_for_pointing_ = true;
+  std::string gripper_action_name_ = "/franka_gripper/move";
+  double gripper_closed_width_ = 0.0;
+  double gripper_speed_ = 0.06;
+  double gripper_wait_timeout_sec_ = 0.25;
+  double gripper_result_timeout_sec_ = 2.5;
+  bool gripper_closed_for_pointing_ = false;
+  bool gripper_close_disabled_ = false;
+#if MEMORY_GAME_HAS_FRANKA_GRIPPER
+  std::unique_ptr<actionlib::SimpleActionClient<franka_gripper::MoveAction>> gripper_client_;
+#endif
   bool return_home_ = true;
   bool use_current_state_as_home_ = true;
   bool require_pose_frame_match_ = true;
