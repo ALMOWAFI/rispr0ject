@@ -60,15 +60,12 @@ vision_node:
 
   base_exclusion_radius_m: 0.20
 
-  # Table workspace in panda_link0. Keep this broad enough for the observed lab
-  # block positions while still rejecting impossible far-away detections.
-  workspace_enable: true
-  workspace_min_x: -0.20
-  workspace_max_x: 0.80
-  workspace_min_y: -0.30
-  workspace_max_y: 0.90
-  workspace_min_z: -0.08
-  workspace_max_z: 0.20
+  # Spherical zones in `target_frame` (panda_link0) where detections are rejected.
+  # Use this to mask persistent false positives (e.g., a yellow box in the corner).
+  # Each entry: { x, y, z, radius } in meters.
+  extra_exclusions:
+    - { x: 0.65, y: -0.20, z: 0.0, radius: 0.25 }   # behind blue "corner"
+    - { x: 0.65, y: 0.40,  z: 0.0, radius: 0.25 }   # behind green "edge"
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
