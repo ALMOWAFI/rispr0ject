@@ -13,7 +13,7 @@ game_node:
   require_detected_blocks: true
   min_detected_blocks_required: 3
   blocks_wait_sec: 0.5
-  block_freshness_sec: 0.20
+  block_freshness_sec: 30.0
   motion_timeout_per_target_sec: 15.0
   motion_timeout_padding_sec: 2.0
   motion_retry_limit: 1
@@ -21,7 +21,7 @@ game_node:
   
   target_frame: "panda_link0"
   target_subscriber_poll_sec: 0.2
-  target_subscriber_timeout_sec: 15.0
+  target_subscriber_timeout_sec: 60.0
   
   default_x: 0.40
   default_y: 0.00
