@@ -67,13 +67,6 @@ struct DetectionResult {
     std::vector<double> areas;
 };
 
-struct ExclusionZone {
-    double x;
-    double y;
-    double z;
-    double radius;
-};
-
 }  // namespace
 
 
@@ -158,7 +151,6 @@ void loadParams() {
     initDefaultColors();
     applyColorFilters();
     loadHsvRangesFromParams();
-    loadExtraExclusionsFromParams();
 }
 
 void initDefaultColors() {
@@ -241,20 +233,6 @@ void loadHsvRangesFromParams() {
         if (!parsed.empty()) {
             cfg.ranges = parsed;
         }
-    }
-}
-
-void loadExtraExclusionsFromParams() {
-    extra_exclusions_.clear();
-    XmlRpc::XmlRpcValue zones;
-    if (!pnh_.getParam("extra_exclusions", zones)) return;
-    for (int i = 0; i < zones.size(); ++i) {
-        XmlRpc::XmlRpcValue& z = zones[i];
-        extra_exclusions_.push_back({
-            static_cast<double>(z["x"]),
-            static_cast<double>(z["y"]),
-            static_cast<double>(z["z"]),
-            static_cast<double>(z["radius"])});
     }
 }
 
@@ -448,38 +426,6 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
                                       cfg.name.c_str(),
                                       candidate_base.x, candidate_base.y, candidate_base.z,
                                       base_exclusion_radius_m_);
-                    continue;
-                }
-            }
-
-            bool in_extra = false;
-            for (const ExclusionZone& zone : extra_exclusions_) {
-                const double dx = candidate_base.x - zone.x;
-                const double dy = candidate_base.y - zone.y;
-                const double dz = candidate_base.z - zone.z;
-                if (dx * dx + dy * dy + dz * dz < zone.radius * zone.radius) {
-                    ROS_WARN_THROTTLE(2.0, "Rejected %s block: inside extra exclusion zone", cfg.name.c_str());
-                    in_extra = true;
-                    break;
-                }
-            }
-            if (in_extra) continue;
-
-            // If we already have a fresh tracked position for this color, reject
-            // candidates that jumped too far from it — treat them as false positives
-            // and let the next-best candidate be tried. If none survive, no detection
-            // is published this frame and the previous position naturally expires
-            // after position_reset_timeout_sec, allowing a true re-lock afterwards.
-            auto fp_it = filtered_positions_.find(cfg.id);
-            if (fp_it != filtered_positions_.end() && max_position_jump_m_ > 0.0) {
-                const double dx = candidate_base.x - fp_it->second.x;
-                const double dy = candidate_base.y - fp_it->second.y;
-                const double dz = candidate_base.z - fp_it->second.z;
-                const double jump = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (jump > max_position_jump_m_) {
-                    ROS_WARN_THROTTLE(2.0,
-                                      "Rejected %s candidate: %.3fm jump from previous tracked position",
-                                      cfg.name.c_str(), jump);
                     continue;
                 }
             }
@@ -917,7 +863,6 @@ double max_candidate_jump_px_ = 120.0;
 double position_reset_timeout_sec_ = 0.5;
 double max_position_jump_m_ = 0.10;
 double base_exclusion_radius_m_ = 0.0;
-std::vector<ExclusionZone> extra_exclusions_;
 bool workspace_enable_ = false;
 double workspace_min_x_ = -10.0;
 double workspace_max_x_ = 10.0;
