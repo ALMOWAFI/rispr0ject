@@ -138,6 +138,11 @@ void loadParams() {
     pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
     pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
 
+    pnh_.param("image_crop_x_min", crop_x_min_, 0);
+    pnh_.param("image_crop_x_max", crop_x_max_, 9999);
+    pnh_.param("image_crop_y_min", crop_y_min_, 0);
+    pnh_.param("image_crop_y_max", crop_y_max_, 9999);
+
     if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
     if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
     if (depth_window_radius_ < 0) depth_window_radius_ = 0;
@@ -334,14 +339,30 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
         return;
     }
 
+    // Mask everything outside the configured crop rectangle to pure black so
+    // it can't trigger any color detection downstream. Tune the rectangle in
+    // yaml using pixel coordinates from rqt_image_view (image_crop_*).
+    cv::Mat working_image = cv_ptr->image;
+    const int cx = std::max(0, crop_x_min_);
+    const int cy = std::max(0, crop_y_min_);
+    const int cw = std::min(working_image.cols, crop_x_max_) - cx;
+    const int ch = std::min(working_image.rows, crop_y_max_) - cy;
+    if (cw > 0 && ch > 0 &&
+        (cx > 0 || cy > 0 || crop_x_max_ < working_image.cols || crop_y_max_ < working_image.rows)) {
+        cv::Mat cropped = cv::Mat::zeros(working_image.size(), working_image.type());
+        const cv::Rect roi(cx, cy, cw, ch);
+        working_image(roi).copyTo(cropped(roi));
+        working_image = cropped;
+    }
+
     // A small blur before HSV conversion reduces pixel-level noise from the camera sensor.
     // Without it, edge pixels on block boundaries can have wildly wrong hues and speckle the masks.
     cv::Mat bgr_smoothed;
     if (blur_kernel_size_ > 1) {
-        cv::GaussianBlur(cv_ptr->image, bgr_smoothed,
+        cv::GaussianBlur(working_image, bgr_smoothed,
                          cv::Size(blur_kernel_size_, blur_kernel_size_), 0);
     } else {
-        bgr_smoothed = cv_ptr->image;
+        bgr_smoothed = working_image;
     }
     cv::Mat hsv;
     cv::cvtColor(bgr_smoothed, hsv, cv::COLOR_BGR2HSV);
@@ -362,6 +383,9 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
     if (publish_debug_images) {
         debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
         debug_overlay = cv_ptr->image.clone();
+        if (cw > 0 && ch > 0) {
+            cv::rectangle(debug_overlay, cv::Rect(cx, cy, cw, ch), cv::Scalar(0, 255, 0), 2);
+        }
     }
 
     for (const ColorConfig& cfg : color_configs_) {
@@ -870,6 +894,11 @@ double workspace_min_y_ = -10.0;
 double workspace_max_y_ = 10.0;
 double workspace_min_z_ = -10.0;
 double workspace_max_z_ = 10.0;
+
+int crop_x_min_ = 0;
+int crop_x_max_ = 9999;
+int crop_y_min_ = 0;
+int crop_y_max_ = 9999;
 
 std::vector<ColorConfig> color_configs_;
 
