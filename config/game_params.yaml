@@ -63,10 +63,10 @@ vision_node:
   # Image-space crop rectangle (pixels). Everything outside is masked to black
   # before color detection. Defaults are wide → no cropping until you tighten.
   # Tune by reading mouse coordinates from rqt_image_view on /vision/debug_overlay.
-  image_crop_x_min: 0
-  image_crop_x_max: 9999
-  image_crop_y_min: 0
-  image_crop_y_max: 9999
+  image_crop_x_min: 280
+  image_crop_x_max: 1000
+  image_crop_y_min: 400
+  image_crop_y_max: 660
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
