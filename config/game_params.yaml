@@ -39,7 +39,7 @@ vision_node:
   blur_kernel_size: 3
   
   min_block_area: 500
-  max_block_area: 60000
+  max_block_area: 15000
   mask_close_iterations: 2
   mask_open_iterations: 2
 
@@ -68,7 +68,7 @@ vision_node:
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
   position_reset_timeout_sec: 0.5
-  max_candidate_jump_px: 120
+  max_candidate_jump_px: 60
   max_position_jump_m: 0.05
 
   hsv_ranges:
