@@ -45,7 +45,7 @@ vision_node:
 
   depth_window_radius: 2
   min_depth_m: 0.10
-  max_depth_m: 2.50
+  max_depth_m: 1.00
   max_depth_age_sec: 1.0
 
   base_exclusion_radius_m: 0.20
