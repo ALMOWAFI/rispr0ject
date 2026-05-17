@@ -67,13 +67,6 @@ struct DetectionResult {
     std::vector<double> areas;
 };
 
-struct ExclusionZone {
-    double x;
-    double y;
-    double z;
-    double radius;
-};
-
 }  // namespace
 
 
@@ -145,6 +138,11 @@ void loadParams() {
     pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
     pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
 
+    pnh_.param("image_crop_x_min", crop_x_min_, 0);
+    pnh_.param("image_crop_x_max", crop_x_max_, 9999);
+    pnh_.param("image_crop_y_min", crop_y_min_, 0);
+    pnh_.param("image_crop_y_max", crop_y_max_, 9999);
+
     if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
     if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
     if (depth_window_radius_ < 0) depth_window_radius_ = 0;
@@ -158,7 +156,6 @@ void loadParams() {
     initDefaultColors();
     applyColorFilters();
     loadHsvRangesFromParams();
-    loadExtraExclusionsFromParams();
 }
 
 void initDefaultColors() {
@@ -241,20 +238,6 @@ void loadHsvRangesFromParams() {
         if (!parsed.empty()) {
             cfg.ranges = parsed;
         }
-    }
-}
-
-void loadExtraExclusionsFromParams() {
-    extra_exclusions_.clear();
-    XmlRpc::XmlRpcValue zones;
-    if (!pnh_.getParam("extra_exclusions", zones)) return;
-    for (int i = 0; i < zones.size(); ++i) {
-        XmlRpc::XmlRpcValue& z = zones[i];
-        extra_exclusions_.push_back({
-            static_cast<double>(z["x"]),
-            static_cast<double>(z["y"]),
-            static_cast<double>(z["z"]),
-            static_cast<double>(z["radius"])});
     }
 }
 
@@ -356,14 +339,30 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
         return;
     }
 
+    // Mask everything outside the configured crop rectangle to pure black so
+    // it can't trigger any color detection downstream. Tune the rectangle in
+    // yaml using pixel coordinates from rqt_image_view (image_crop_*).
+    cv::Mat working_image = cv_ptr->image;
+    const int cx = std::max(0, crop_x_min_);
+    const int cy = std::max(0, crop_y_min_);
+    const int cw = std::min(working_image.cols, crop_x_max_) - cx;
+    const int ch = std::min(working_image.rows, crop_y_max_) - cy;
+    if (cw > 0 && ch > 0 &&
+        (cx > 0 || cy > 0 || crop_x_max_ < working_image.cols || crop_y_max_ < working_image.rows)) {
+        cv::Mat cropped = cv::Mat::zeros(working_image.size(), working_image.type());
+        const cv::Rect roi(cx, cy, cw, ch);
+        working_image(roi).copyTo(cropped(roi));
+        working_image = cropped;
+    }
+
     // A small blur before HSV conversion reduces pixel-level noise from the camera sensor.
     // Without it, edge pixels on block boundaries can have wildly wrong hues and speckle the masks.
     cv::Mat bgr_smoothed;
     if (blur_kernel_size_ > 1) {
-        cv::GaussianBlur(cv_ptr->image, bgr_smoothed,
+        cv::GaussianBlur(working_image, bgr_smoothed,
                          cv::Size(blur_kernel_size_, blur_kernel_size_), 0);
     } else {
-        bgr_smoothed = cv_ptr->image;
+        bgr_smoothed = working_image;
     }
     cv::Mat hsv;
     cv::cvtColor(bgr_smoothed, hsv, cv::COLOR_BGR2HSV);
@@ -384,6 +383,9 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
     if (publish_debug_images) {
         debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
         debug_overlay = cv_ptr->image.clone();
+        if (cw > 0 && ch > 0) {
+            cv::rectangle(debug_overlay, cv::Rect(cx, cy, cw, ch), cv::Scalar(0, 255, 0), 2);
+        }
     }
 
     for (const ColorConfig& cfg : color_configs_) {
@@ -452,20 +454,9 @@ void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
                 }
             }
 
-            bool in_extra = false;
-            for (const ExclusionZone& zone : extra_exclusions_) {
-                const double dx = candidate_base.x - zone.x;
-                const double dy = candidate_base.y - zone.y;
-                const double dz = candidate_base.z - zone.z;
-                if (dx * dx + dy * dy + dz * dz < zone.radius * zone.radius) {
-                    ROS_WARN_THROTTLE(2.0, "Rejected %s block: inside extra exclusion zone", cfg.name.c_str());
-                    in_extra = true;
-                    break;
-                }
+            if (!applyEmaSmoothing(cfg.id, candidate_base, frame_stamp, p_base)) {
+                continue;
             }
-            if (in_extra) continue;
-
-            p_base = applyEmaSmoothing(cfg.id, candidate_base, frame_stamp);
             chosen_centroid = candidate;
             chosen_area = det.areas[static_cast<size_t>(idx)];
             accepted_candidate = true;
@@ -795,15 +786,19 @@ void pruneTrackingState(const ros::Time& now) {
     }
 }
 
-geometry_msgs::Point applyEmaSmoothing(int block_id,
-                                       const geometry_msgs::Point& current,
-                                       const ros::Time& stamp) {
+bool applyEmaSmoothing(int block_id,
+                       const geometry_msgs::Point& current,
+                       const ros::Time& stamp,
+                       geometry_msgs::Point& out_smoothed) {
     auto it = filtered_positions_.find(block_id);
     auto time_it = filtered_position_times_.find(block_id);
+
+    // First time seeing this block — accept fresh.
     if (it == filtered_positions_.end() || time_it == filtered_position_times_.end()) {
         filtered_positions_[block_id] = current;
         filtered_position_times_[block_id] = stamp;
-        return current;
+        out_smoothed = current;
+        return true;
     }
 
     const double age_sec = (stamp - time_it->second).toSec();
@@ -811,19 +806,31 @@ geometry_msgs::Point applyEmaSmoothing(int block_id,
     const double dy = current.y - it->second.y;
     const double dz = current.z - it->second.z;
     const double jump_m = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if ((position_reset_timeout_sec_ > 0.0 && age_sec > position_reset_timeout_sec_) ||
-        (max_position_jump_m_ > 0.0 && jump_m > max_position_jump_m_)) {
+
+    // Previous lost too long ago — accept new as a fresh start.
+    if (position_reset_timeout_sec_ > 0.0 && age_sec > position_reset_timeout_sec_) {
         filtered_positions_[block_id] = current;
         filtered_position_times_[block_id] = stamp;
-        return current;
+        out_smoothed = current;
+        return true;
     }
 
+    // Previous is fresh BUT jump is too big — likely false positive. Reject.
+    // Caller skips this candidate; if all are rejected, no detection is published
+    // for this color this frame and the stored position naturally expires after
+    // position_reset_timeout_sec, allowing a clean re-lock.
+    if (max_position_jump_m_ > 0.0 && jump_m > max_position_jump_m_) {
+        return false;
+    }
+
+    // Normal case — EMA smoothing.
     geometry_msgs::Point& prev = it->second;
     prev.x = smoothing_alpha_ * current.x + (1.0 - smoothing_alpha_) * prev.x;
     prev.y = smoothing_alpha_ * current.y + (1.0 - smoothing_alpha_) * prev.y;
     prev.z = smoothing_alpha_ * current.z + (1.0 - smoothing_alpha_) * prev.z;
     filtered_position_times_[block_id] = stamp;
-    return prev;
+    out_smoothed = prev;
+    return true;
 }
 
 void publishBlocks(const std::vector<memory_game::Block>& blocks, const ros::Time& stamp) {
@@ -898,7 +905,6 @@ double max_candidate_jump_px_ = 120.0;
 double position_reset_timeout_sec_ = 0.5;
 double max_position_jump_m_ = 0.10;
 double base_exclusion_radius_m_ = 0.0;
-std::vector<ExclusionZone> extra_exclusions_;
 bool workspace_enable_ = false;
 double workspace_min_x_ = -10.0;
 double workspace_max_x_ = 10.0;
@@ -906,6 +912,11 @@ double workspace_min_y_ = -10.0;
 double workspace_max_y_ = 10.0;
 double workspace_min_z_ = -10.0;
 double workspace_max_z_ = 10.0;
+
+int crop_x_min_ = 0;
+int crop_x_max_ = 9999;
+int crop_y_min_ = 0;
+int crop_y_max_ = 9999;
 
 std::vector<ColorConfig> color_configs_;
 

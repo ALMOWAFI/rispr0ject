@@ -57,11 +57,19 @@ vision_node:
     - { x: 0.65, y: -0.20, z: 0.0, radius: 0.25 }   # behind blue "corner"
     - { x: 0.65, y: 0.40,  z: 0.0, radius: 0.25 }   # behind green "edge"
 
+  # Image-space crop rectangle (pixels). Everything outside is masked to black
+  # before color detection. Tune by reading mouse coordinates from rqt_image_view
+  # on /vision/debug_overlay (green rectangle shows current bounds).
+  image_crop_x_min: 280
+  image_crop_x_max: 1000
+  image_crop_y_min: 400
+  image_crop_y_max: 660
+
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
   position_reset_timeout_sec: 0.5
   max_candidate_jump_px: 120
-  max_position_jump_m: 0.10
+  max_position_jump_m: 0.05
 
   hsv_ranges:
     red:
