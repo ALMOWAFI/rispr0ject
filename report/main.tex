@@ -1,0 +1,699 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\begin{document}
+
+\title{Memory Game with a Franka Emika Panda:\\
+Vision-Based Block Detection and Sequence Replay}
+
+\author{
+\IEEEauthorblockN{Ali, Sinan, Izat, Boburjon}
+\IEEEauthorblockA{\textit{Robotics and Intelligent Systems Lab 2} \\
+\textit{Constructor University Bremen}\\
+Bremen, Germany}
+}
+
+\maketitle
+
+\begin{abstract}
+This paper presents the design and implementation of an interactive
+memory game using a Franka Emika Panda robotic arm and an Intel RealSense
+RGB-D camera. The robot demonstrates a randomly generated sequence by
+pointing at colored blocks on a table, and the player reproduces the
+sequence by physically removing blocks from their initial positions. The
+system is implemented as a ROS1 package composed of independent nodes for
+vision, player selection, game logic, and motion planning, with all
+components communicating through standard ROS topics. We describe the
+classical computer vision pipeline (HSV thresholding with morphological
+operations, depth-based 3D projection, and temporal smoothing), the
+slot-based player selection mechanism, and the MoveIt-based motion
+planning approach. We discuss three major design decisions made during
+development---choosing HSV thresholding over deep learning, pre-detection
+image cropping over 3D workspace filtering, and sequence-based motion
+dispatch over single-target dispatch---along with the alternatives
+considered and the rationale for each choice. The implementation
+demonstrates that, with careful tuning and robust state management,
+classical computer vision and standard motion planning can produce a
+reliable interactive robot system within a semester-length project.
+\end{abstract}
+
+\begin{IEEEkeywords}
+human-robot interaction, computer vision, motion planning, ROS,
+manipulator robotics
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Human-robot interaction (HRI) demonstrations serve a dual purpose in
+robotics education: they expose students to the breadth of subsystems
+required to build a working robot application, and they produce engaging
+artifacts that communicate robotics capabilities to a non-technical
+audience. A memory game between a robot and a human is well-suited to
+this purpose because it exercises real-time perception, state
+management, motion planning, and feedback to the user, while remaining
+intuitive enough that an observer immediately understands what the
+system is doing.
+
+This paper describes the design and implementation of such a game
+system, developed over the course of a semester within the Robotics
+and Intelligent Systems Lab 2 course. The hardware platform consists
+of a Franka Emika Panda 7-DOF arm and an Intel RealSense RGB-D camera
+mounted to observe a tabletop workspace. The software is implemented
+as a ROS1 package using standard middleware components: OpenCV for
+image processing, MoveIt for motion planning, and \texttt{tf2} for
+coordinate frame management.
+
+The remainder of the paper is organized as follows. Section~\ref{sec:game}
+describes the game as originally envisioned and as ultimately implemented.
+Section~\ref{sec:arch} presents the software architecture. Section~\ref{sec:methods}
+discusses the methods used for the major subsystems. Section~\ref{sec:decisions}
+analyzes three significant design decisions in detail. Sections~\ref{sec:future}
+and~\ref{sec:lessons} discuss future work and lessons learned.
+
+\section{Game Description}
+\label{sec:game}
+
+This section describes the game from the player's perspective, separated
+into the originally envisioned version and the final implementation. The
+distinction is important because the differences reflect adaptations
+made in response to real-world hardware and environmental constraints
+that were not anticipated at the planning stage.
+
+\subsection{Envisioned Game (User Story)}
+
+The originally envisioned interaction is as follows. A player approaches
+the table on which four colored blocks (red, green, blue, yellow) are
+arranged. The system enters a ready state and indicates that the game
+is about to begin. The robot arm autonomously generates a random sequence
+of blocks (initially three) and demonstrates it by smoothly moving the
+arm above each block in turn, pausing briefly to ``point'' at each one.
+The player watches and memorizes the sequence.
+
+After the demonstration, the player reproduces the sequence by interacting
+with the blocks in the correct order. The system recognizes each selection
+and provides immediate audio-visual feedback: a positive tone for a correct
+selection, a negative tone for a wrong selection, and a satisfying
+celebration when an entire sequence is completed correctly. The difficulty
+escalates: each successful round adds one block to the next sequence, and
+the time available for the player to respond decreases over time. The
+system maintains a score and persists it across rounds.
+
+The system is robust to environmental factors: it handles changes in
+ambient lighting, players wearing colored clothes, and occasional
+disturbances such as someone walking past the camera. The interaction
+is single-player but designed in a way that would extend naturally to
+multi-player tournaments.
+
+\subsection{Final Implementation (User Story)}
+
+The implemented system retains the core game loop of the envisioned
+design but operates with several pragmatic constraints. Only three
+colors are used in the active game: green, blue, and yellow. Red is
+configured but disabled by default due to detection unreliability in
+the lab environment, where skin tones, brown wooden surfaces, and the
+robot's status indicator overlap with the red HSV range.
+
+The game requires explicit setup: the blocks must be placed on the
+table in fixed positions before the game starts, and the player must
+remain mostly outside the camera's view during demonstration. Once
+the blocks are stable and at least three are detected, the system
+records each block's initial position as a ``slot''. The robot then
+generates a sequence and performs a hover-point-hover motion above
+each block in turn.
+
+The player reproduces the sequence by \emph{physically removing} each
+block from its slot in the correct order. The slot-based player
+selection mechanism detects a block's absence from its initial
+position for longer than a configurable threshold and publishes the
+corresponding selection event. After the entire sequence is reproduced,
+the game node verifies correctness and updates the score. The current
+implementation supports a single round at fixed difficulty; difficulty
+progression and multi-player support remain as future work.
+
+A browser-based UI displays the live game state, score, and detected
+block list. The UI is primarily for the team and the demonstrator
+rather than the player, who interacts directly with the physical
+blocks.
+
+\subsection{Differences and Rationale}
+
+The differences between the envisioned and the implemented game fall
+into three categories.
+
+\textit{Reduced color palette.} Red was disabled because reliable
+discrimination of red against skin tones and warm-colored background
+objects requires either narrower HSV ranges (which tend to also reject
+real red blocks under varying illumination) or more sophisticated
+detection methods than were practical within the project's scope.
+
+\textit{Slot-based instead of gesture-based selection.} The envisioned
+design implicitly assumed some form of gesture or hand pose detection.
+Slot-based selection (detecting a block's disappearance from its initial
+position) was chosen as the simpler and more reliable mechanism. It
+relies on the same vision pipeline already used for block detection,
+avoids the need for a separate hand-tracking model, and is robust to
+the player's skin tone, clothing, and approach direction.
+
+\textit{Fixed difficulty.} The progression mechanic (increasing sequence
+length over rounds, decreasing player response time) was deferred to
+focus engineering effort on reliable single-round gameplay. Adding
+difficulty progression on top of the working baseline is straightforward
+in principle but was not prioritized.
+
+\section{System Architecture}
+\label{sec:arch}
+
+The software is structured as a ROS1 (Noetic) package named
+\texttt{memory\_game}. Functionality is divided across four primary
+nodes plus supporting infrastructure. All inter-node communication uses
+standard ROS publish/subscribe topics; no service or action interfaces
+are required for the main game loop.
+
+\subsection{ROS Node Organization}
+
+The four primary nodes are:
+
+\begin{itemize}
+\item \texttt{vision\_node} (C++): Subscribes to the RGB camera image,
+depth image, and camera info topics from the RealSense driver.
+Detects colored blocks, projects them into the robot base frame, and
+publishes the detection list.
+\item \texttt{player\_selection} (Python): Subscribes to the detected
+block list. Maintains a record of each block's initial position
+(``slot'') and publishes a selection event when a block disappears
+from its slot for longer than a threshold time.
+\item \texttt{game\_node} (C++): Owns the game state machine. Generates
+random sequences, dispatches them to the motion node, receives
+selection events from the player\_selection node, and verifies the
+player's response.
+\item \texttt{motion\_moveit\_node} (C++): Subscribes to target sequence
+messages. Executes a hover-point-hover trajectory for each block using
+MoveIt-based joint-space planning. Publishes status updates after
+each motion stage.
+\end{itemize}
+
+A fifth node, the UI server (\texttt{ui/server.py}, Python), provides
+a browser-based dashboard. It subscribes to all the game-related
+topics, serves a static HTML/JS frontend, and exposes a simple REST
+API to start and stop the underlying ROS nodes.
+
+\subsection{Topic Communication}
+
+Table~\ref{tab:topics} summarizes the topics that carry the
+game-relevant traffic.
+
+\begin{table}[t]
+\centering
+\caption{Primary ROS Topics}
+\label{tab:topics}
+\begin{tabular}{lll}
+\toprule
+\textbf{Topic} & \textbf{Publisher} & \textbf{Subscribers} \\
+\midrule
+\texttt{/detected\_blocks} & \texttt{vision\_node} & game, selection, UI \\
+\texttt{/player\_selection} & \texttt{player\_selection} & game, UI \\
+\texttt{/target\_sequence} & \texttt{game\_node} & motion \\
+\texttt{/motion\_status} & \texttt{motion\_moveit\_node} & game, UI \\
+\texttt{/game\_state} & \texttt{game\_node} & UI \\
+\texttt{/score} & \texttt{game\_node} & UI \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Custom Message Types}
+
+Four custom messages are defined in the \texttt{msg/} directory:
+
+\begin{itemize}
+\item \texttt{Block}: a single colored block with integer id, color
+name, 3D position, orientation, and a confidence value.
+\item \texttt{BlockArray}: a timestamped header and a list of
+\texttt{Block} messages, used for the live detection topic.
+\item \texttt{BlockSequence}: a timestamped header, a sequence
+identifier, and an ordered list of \texttt{Block} messages.
+\item \texttt{PlayerSelection}: the id and color of the selected block,
+a selection type tag, and a confidence value.
+\end{itemize}
+
+The sequence identifier in \texttt{BlockSequence} is also embedded in
+all subsequent \texttt{/motion\_status} updates, allowing the game node
+to distinguish motion events from the current round from any stragglers
+from a previous round.
+
+\subsection{Coordinate Frames}
+
+The camera publishes its outputs in the \texttt{camera\_color\_optical\_frame}.
+All block positions are transformed to \texttt{panda\_link0} (the robot
+base frame) inside \texttt{vision\_node} using \texttt{tf2}, so that
+all downstream consumers operate in a single, robot-relative coordinate
+system. The transformation is performed per-detection at the time the
+3D position is computed; this requires the TF tree from the camera
+frame to the robot base to be valid at the corresponding timestamp.
+
+\section{Methods}
+\label{sec:methods}
+
+This section describes the methods used by each of the major subsystems.
+
+\subsection{Vision Pipeline}
+\label{sec:vision}
+
+The vision pipeline implemented in \texttt{vision\_node} is a classical
+image processing chain. Each color camera frame triggers the following
+sequence of operations:
+
+\textit{1) Image acquisition and synchronization.} The RGB image is
+received via the ROS image topic. Because depth and color are published
+independently with their own timestamps, the depth frame is buffered
+and the closest-timestamp match (within a configurable tolerance) is
+selected for each color frame.
+
+\textit{2) Image-space crop.} Before any color detection, the image
+is masked: pixels outside a configurable rectangle (defined by four
+pixel-coordinate parameters in YAML) are set to pure black. This crop
+ensures that color detection only ever sees the active play area;
+objects outside the rectangle---background tables, the robot's own
+status LED, players wearing colored clothes---are invisible to all
+downstream stages.
+
+\textit{3) Color space conversion.} The cropped BGR image is converted
+to HSV using \texttt{cv::cvtColor}. HSV is preferred over BGR because
+it separates color identity (hue) from intensity (value) and
+saturation, making color matching more robust to lighting variation.
+
+\textit{4) Per-color thresholding.} For each configured color, the
+HSV image is thresholded against a configured range using
+\texttt{cv::inRange}. Red is configured with two ranges to handle
+the wrap-around at hue 0/180; other colors use a single range. The
+results are combined via \texttt{cv::bitwise\_or} into a binary mask
+per color.
+
+\textit{5) Morphological cleanup.} Each color's mask is processed
+with a morphological CLOSE operation (to fill small holes caused by
+glare or occlusion inside a block) followed by an OPEN operation
+(to remove small isolated noise blobs). The order is significant:
+applying OPEN first would erode a block with a glare hole into
+disconnected fragments that the subsequent area filter would reject.
+
+\textit{6) Contour extraction and filtering.} External contours
+are extracted with \texttt{cv::findContours}. Contours whose
+pixel area falls outside configurable bounds (\texttt{min\_block\_area},
+\texttt{max\_block\_area}) are discarded.
+
+\textit{7) Centroid computation.} For each surviving contour, the
+centroid is computed using image moments: $c_x = M_{10}/M_{00}$,
+$c_y = M_{01}/M_{00}$.
+
+\textit{8) Depth lookup.} The depth at the centroid pixel is obtained
+by reading a small window of depth pixels around the centroid and
+taking the median. The median is robust to noisy zero readings and
+single-pixel spike errors that are characteristic of structured-light
+and stereo depth sensors.
+
+\textit{9) 3D projection.} The pixel coordinates and depth value are
+combined with the camera's intrinsic calibration (obtained via the
+\texttt{CameraInfo} topic) to produce a 3D point in the camera frame.
+The OpenCV \texttt{PinholeCameraModel::projectPixelTo3dRay} function
+produces a unit-length ray from the camera through the pixel, which
+is scaled by the measured depth.
+
+\textit{10) TF transformation.} The 3D point in the camera frame is
+transformed to \texttt{panda\_link0} via \texttt{tf\_buffer\_.transform}.
+A failed transform (typically due to missing or stale TF data) causes
+the candidate to be rejected and the next-best candidate to be tried.
+
+\textit{11) Filtering.} The 3D point is rejected if it is non-finite
+(NaN or infinity from invalid depth or TF), if it lies inside a
+configurable exclusion sphere around the robot base (used to reject
+the Panda's status LED), or if it lies inside any of a configurable
+list of additional exclusion spheres (used to mask persistent false
+positives at known locations).
+
+\textit{12) Temporal smoothing.} The 3D position is fed into an
+exponential moving average (EMA) per block. If no previous position
+is stored, the current value is accepted as the initial estimate. If
+the stored position is older than a timeout, it is dropped and the
+current value becomes a fresh estimate. If the jump from the stored
+position exceeds a threshold (while the stored position is fresh), the
+candidate is rejected as a probable false positive and the caller
+tries the next candidate. Otherwise, the new value is blended into the
+stored estimate via EMA with a configurable weight $\alpha$.
+
+\subsection{Player Selection}
+\label{sec:selection}
+
+The player selection mechanism, implemented in
+\texttt{scripts/player\_selection.py}, observes the live block
+detections and infers player intent from changes in block presence.
+
+The node operates in two phases. During the \textit{initialization
+phase}, the node waits for a minimum number of blocks to be detected
+in stable positions for a settling period. Each block's position at
+the end of the settling period is recorded as that block's ``slot''.
+
+During the \textit{monitoring phase}, the node subscribes to each new
+\texttt{/detected\_blocks} message and checks whether each known
+slot's block is still present at (or near) its slot position. If a
+block has been continuously absent for a threshold time
+(\texttt{missing\_hold\_sec}) and a cooldown has elapsed since the
+last selection event, a \texttt{/player\_selection} message is
+published with the corresponding block id and color.
+
+If all known blocks disappear simultaneously (typically because the
+game ended and the player removed everything), the node resets after
+a delay and re-enters the initialization phase. This allows the system
+to recover for a new round without restarting the node.
+
+\subsection{Motion Planning}
+\label{sec:motion}
+
+Motion is handled by \texttt{newmotion/motion\_moveit\_node.cpp}, which
+uses MoveIt for collision-aware joint-space planning on the Panda's
+\texttt{arm} planning group.
+
+The node subscribes to \texttt{/target\_sequence} and treats each
+incoming message as a complete dispatch: the entire sequence is
+executed as one operation. For each block in the sequence, the node
+performs a hover-point-hover motion:
+
+\begin{enumerate}
+\item Plan and execute a motion to a hover pose above the block at
+a configurable height (\texttt{min\_hover\_z}).
+\item Plan and execute a downward motion to a lower point pose at
+a configurable clearance above the block, indicating the target to
+the player.
+\item Plan and execute a return motion to the hover pose.
+\end{enumerate}
+
+After the last block in the sequence, the arm returns to a home pose
+if configured. Throughout the sequence, the node publishes
+\texttt{/motion\_status} messages of the form
+\texttt{STATE:sequence\_id:block\_id} (e.g.,
+\texttt{POINTING:1:2} or \texttt{AT\_TARGET:1:3}) so that the game
+node can track progress and distinguish events from the current
+sequence from any stragglers from a previous one.
+
+Joint-space planning was chosen over Cartesian path execution after
+experimentation: the lab Panda produced smoother and more reliable
+motion with planned joint targets than with
+\texttt{computeCartesianPath}, which occasionally produced jerky or
+infeasible plans for the dip motion in our hover-point-hover pattern.
+
+\section{Design Decisions}
+\label{sec:decisions}
+
+Many design choices were made during development. This section
+analyzes three decisions that had the largest impact on the system's
+behavior and the team's effort budget. For each, we describe the
+implemented choice, a credible alternative path that could have
+produced a working minimum-viable demonstration, and the reasons for
+the chosen path.
+
+\subsection{Decision~1: HSV Thresholding vs. Deep Learning Detection}
+
+\textit{Chosen approach.} Block detection uses classical HSV color
+thresholding with morphological cleanup, as described in
+Section~\ref{sec:vision}. Each color is configured with a manually
+tuned HSV range stored in YAML and adjustable without recompilation.
+
+\textit{Alternative considered.} A modern alternative would have been
+to train a small convolutional neural network (e.g., YOLOv8-nano or a
+purpose-built segmentation model) on a labeled dataset of block images
+captured under the lab's actual lighting conditions. The trained
+model would produce bounding boxes or instance masks per color, which
+could feed into the same downstream depth/projection/smoothing stages.
+
+\textit{Rationale for the chosen path.} HSV was selected for several
+reasons. First, the project scope (one semester) did not include
+sufficient time to collect a labeled dataset, train, and tune a neural
+detector. Second, the lab environment is controlled enough that the
+block colors are well-separated in HSV space; manual tuning suffices.
+Third, HSV thresholds are inspectable and tunable in YAML without
+retraining---when illumination shifts, a team member can adjust four
+numbers and observe the result immediately. Fourth, the CPU cost is
+negligible, leaving headroom for other processing. The accepted
+trade-off is that the system is sensitive to lighting changes and
+requires per-deployment tuning, which is acceptable for a fixed-lab
+demonstration.
+
+\subsection{Decision~2: Image-Space Crop vs. 3D Workspace Bounding}
+
+\textit{Chosen approach.} False-positive detections from outside the
+play area are suppressed by an image-space crop: a configurable
+rectangle in pixel coordinates is applied before color detection,
+and pixels outside the rectangle are masked to pure black.
+
+\textit{Alternative considered.} A natural alternative is a 3D
+workspace bounding box: a region in \texttt{panda\_link0} coordinates
+that defines the valid play area, with detections outside the region
+filtered out post-projection. This alternative was implemented multiple
+times during the project under various names (\texttt{workspace\_*}
+parameters, \texttt{target\_workspace\_*} parameters).
+
+\textit{Rationale for the chosen path.} The 3D workspace approach
+proved consistently brittle in practice. Its correctness depends on
+accurate TF data and stable depth measurements; if either drifted
+slightly, the bounds would intermittently reject real blocks, and the
+team would respond by widening the bounds until they no longer filtered
+anything useful. The cycle of ``add workspace, blocks get rejected,
+widen workspace, doesn't filter anymore'' repeated several times in
+the commit history.
+
+The image-space crop avoids these failure modes. Pixel coordinates do
+not depend on TF or depth accuracy: the crop is fixed relative to the
+camera image, and as long as the camera mount does not move, the
+crop remains correct. Tuning is visual: the team subscribes to a
+\texttt{debug\_overlay} topic in \texttt{rqt\_image\_view} that draws
+the current crop rectangle as a green outline on the live camera
+image, and adjusts the four pixel coordinates until the rectangle
+tightly wraps the play area. The crop also acts as a clean
+preprocessing boundary: downstream code does not need to handle the
+``what if it's outside the workspace'' case.
+
+The accepted trade-off is that the crop must be re-tuned if the
+camera mount physically shifts. In practice, the camera in our setup
+is fixed, so this is a one-time setup cost.
+
+\subsection{Decision~3: Sequence-Based Motion vs. Single-Target Motion}
+
+\textit{Chosen approach.} The game node dispatches the entire
+sequence to the motion node as a single \texttt{BlockSequence} message.
+The motion node executes the full sequence atomically and publishes
+status updates tagged with the sequence id.
+
+\textit{Alternative considered.} The earlier design (and a common
+pattern in similar systems) is to send one target at a time: the
+game publishes a single \texttt{Block} target, the motion node
+executes a single hover-point-hover, the motion node reports
+completion, and the game node sends the next target. The legacy
+\texttt{/target\_block} topic in the repository reflects this earlier
+design.
+
+\textit{Rationale for the chosen path.} Sequence-based dispatch
+simplifies error handling significantly. With single-target dispatch,
+the game node had to maintain a per-target state machine: which
+target was just sent, are we waiting for completion, did completion
+arrive, is the motion status update for the current or a stale target.
+With sequence-based dispatch, the motion node owns this state
+internally; the game node only needs to know whether the entire
+sequence is in progress, succeeded, or failed.
+
+The sequence id embedded in motion status messages also resolves a
+common race condition: motion status messages can arrive after a
+new sequence has been started, and the game can ignore them by checking
+the sequence id. Without an id, the game would need timing-based
+heuristics to distinguish current from stale events.
+
+The accepted trade-offs are that the motion node is more complex
+(it manages the sequence loop internally), and that any mid-sequence
+retry must reuse the original sequence message rather than rebuilding
+from current detections; the latter is implemented as a ``frozen
+targets'' cache in the game node.
+
+\section{Future Work}
+\label{sec:future}
+
+Several aspects of the originally envisioned game were not part of the
+demonstrated implementation. Each could be added to the existing
+software system with bounded effort.
+
+\textit{Red color reliability.} Reliable red detection in the lab
+environment would require either (a) per-session HSV calibration to
+adapt to current lighting, (b) depth-aware area filtering that uses
+the expected pixel size of a block at the measured depth to reject
+larger objects (e.g., a red shirt) even if they pass the HSV threshold,
+or (c) replacing color-only detection with fiducial markers
+(ArUco/AprilTag) on top of each block, which would also eliminate the
+need for per-color tuning altogether at the cost of altering the
+physical blocks.
+
+\textit{Difficulty progression.} The game node currently uses a fixed
+sequence length (\texttt{base\_length: 3}). The parameter
+\texttt{length\_per\_level} already exists and is wired through the
+sequence generator; adding a difficulty progression requires
+incrementing a level counter after each successful round and using
+it as a multiplier. Visual and audio feedback for level transitions
+would be added on the UI side.
+
+\textit{Gesture-based player selection.} The current slot-based
+selection works reliably but requires the player to physically move
+blocks. A gesture-based alternative would let the player point at
+the block they wish to select. This could be implemented with
+MediaPipe Hands or a similar lightweight pose-estimation model
+running as an additional ROS node, publishing to a
+\texttt{/player\_selection} topic with the same message format. The
+game node would not need any changes.
+
+\textit{Voice and audio feedback.} The browser UI already has
+infrastructure for sound playback. Adding text-to-speech announcements
+of game state changes, encouragement on correct selections, and
+distinct sounds for level transitions would significantly enhance the
+HRI feel without changing any of the ROS components.
+
+\textit{Multi-player support.} The current
+\texttt{player\_selection.py} tracks a single player. Multi-player
+support would involve either (a) splitting the play area into per-player
+zones and running one player\_selection instance per zone, or
+(b) extending the selection event message with a player id derived from
+which slot disappeared. The game node would need a per-player score
+table.
+
+\section{Lessons Learned}
+\label{sec:lessons}
+
+This section summarizes the major challenges encountered during the
+project and reflects on how they would be handled differently in a
+future project.
+
+\subsection{Design Challenges}
+
+The largest design lesson was that assumptions about scene cleanliness
+made at the planning stage do not survive contact with a real lab
+environment. The original mock vision node assumed that ``the camera
+sees the blocks and nothing else.'' In practice, the camera sees the
+robot's status LED, the operator's clothing, background tables, and
+ambient objects whose colors happen to overlap with the configured
+block colors.
+
+The system therefore needed multiple defensive layers rather than a
+single ``correct'' detection method. The final pipeline applies, in
+order: an image crop, HSV thresholding, area filtering, base-exclusion
+zones, additional exclusion zones for known false-positive locations,
+and temporal smoothing with jump rejection. No single layer is
+sufficient, but the layered design tolerates the failure of any one
+of them.
+
+In a future project, we would budget explicit time at the start for
+identifying ``what does the camera actually see'' in the deployment
+environment, rather than assuming the scene matches the design's
+ideal.
+
+\subsection{Implementation Challenges}
+
+The most consistently difficult implementation problem was
+synchronization between the depth and color images from the RealSense
+camera. The two image streams arrive with separate timestamps that do
+not always align perfectly; without explicit handling, the depth
+lookup at a centroid pixel could read from a frame whose content no
+longer matches the color frame's content.
+
+The solution was a buffered closest-match strategy: depth frames are
+held in a small ring buffer, and for each color frame the buffer is
+searched for the timestamp-nearest depth frame within a configurable
+tolerance. If no frame is within tolerance, the most recent depth is
+used as a fallback with a warning.
+
+Beyond synchronization, the morphological cleanup order
+(close-then-open) and the HSV range tuning each required several
+iterations against real lab data, not synthetic test images. The order
+of morphology operations in particular was a small but high-impact
+choice: applying open-then-close instead of close-then-open caused
+blocks with internal glare holes to be fragmented and subsequently
+rejected by the area filter.
+
+\subsection{Organizational Challenges}
+
+The most painful organizational lesson was the cost of silent reverts
+and uncoordinated changes. The project history includes commits where
+substantial recent work was removed (often as a side effect of a
+broader rollback intended to restore an earlier runtime behavior). In
+each case, the change was technically reasonable in isolation, but the
+team member making it did not know about the newer work that was
+caught in the rollback.
+
+A specific example: a commit titled ``Restore [earlier] runtime
+behavior'' rolled back several files to a previous state. Among the
+changes was the removal of a recently added image-cropping feature
+that was the next day's planned demonstration improvement. The
+rollback was performed because of a separate motion issue; the
+person performing it did not see the vision changes as relevant. The
+fix required a careful manual merge: keep the rollback's good
+defaults, restore the vision feature on top, preserve the
+documentation commit added in the interim.
+
+In future projects, we would adopt a stricter coordination protocol:
+larger reverts get a heads-up message in the team chat naming the
+files they will touch, smaller atomic commits per logical change, and
+clear ownership of each major subsystem so the team member responsible
+is consulted before changes to ``their'' code.
+
+\subsection{Tooling and Workflow}
+
+A general lesson is that runtime configuration (parameters in
+\texttt{game\_params.yaml}) ended up being touched far more often
+than any code file. Many bugs and behavior issues were resolved by
+parameter changes rather than code changes. In retrospect, the team
+should have invested earlier in a configuration management strategy:
+clear documentation of what each parameter does, version control for
+parameter changes with the same rigor as code, and ideally a runtime
+parameter inspection tool that surfaced the active values at start-up.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented the design and implementation of a memory game
+system using a Franka Emika Panda arm and a RealSense RGB-D camera.
+The system is composed of independent ROS nodes for vision, player
+selection, game logic, and motion, communicating through standard ROS
+topics with a small set of custom message types. The vision pipeline
+uses classical HSV thresholding with multiple defensive filtering
+layers, the player selection mechanism detects block disappearance
+from initialization-time slots, and the motion controller uses MoveIt
+to execute sequence-based hover-point-hover trajectories.
+
+The project demonstrates that classical computer vision and standard
+motion planning---when carefully integrated and tuned against
+real-world conditions---can produce a reliable interactive robot
+system within a semester-length project. The major design decisions
+favored simplicity, tunability, and inspectability over modern but
+heavier alternatives; the trade-offs accepted are realistic for a
+fixed-deployment educational demonstrator, and the failure modes of
+each design choice are well understood.
+
+\begin{thebibliography}{00}
+\bibitem{ros} M. Quigley et al., ``ROS: an open-source Robot Operating
+System,'' in \textit{ICRA Workshop on Open Source Software}, 2009.
+\bibitem{opencv} G. Bradski, ``The OpenCV Library,'' \textit{Dr. Dobb's
+Journal of Software Tools}, 2000.
+\bibitem{moveit} D. Coleman, I. Sucan, S. Chitta, and N. Correll,
+``Reducing the barrier to entry of complex robotic software: a
+MoveIt! case study,'' \textit{Journal of Software Engineering for
+Robotics}, vol.~5, no.~1, pp.~3--16, 2014.
+\bibitem{realsense} L. Keselman, J. Iselin Woodfill, A. Grunnet-Jepsen,
+and A. Bhowmik, ``Intel RealSense Stereoscopic Depth Cameras,'' in
+\textit{IEEE Conference on Computer Vision and Pattern Recognition
+Workshops}, 2017.
+\bibitem{franka} T. Haddadin et al., ``The Franka Emika Robot: A
+Reference Platform for Robotics Research and Education,''
+\textit{IEEE Robotics \& Automation Magazine}, vol.~29, no.~2,
+pp.~46--64, 2022.
+\end{thebibliography}
+
+\end{document}
