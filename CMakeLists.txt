@@ -80,20 +80,10 @@ add_dependencies(motion_hw_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXP
 
 # Optional: build MoveIt-backed motion bridge if MoveIt is installed.
 find_package(moveit_ros_planning_interface QUIET)
-find_package(actionlib QUIET)
-find_package(franka_gripper QUIET)
 if(moveit_ros_planning_interface_FOUND)
   add_executable(motion_moveit_node newmotion/motion_moveit_node.cpp)
   target_link_libraries(motion_moveit_node ${catkin_LIBRARIES} ${moveit_ros_planning_interface_LIBRARIES})
   target_include_directories(motion_moveit_node PRIVATE ${moveit_ros_planning_interface_INCLUDE_DIRS})
-  if(actionlib_FOUND AND franka_gripper_FOUND)
-    target_compile_definitions(motion_moveit_node PRIVATE MEMORY_GAME_HAS_FRANKA_GRIPPER=1)
-    target_link_libraries(motion_moveit_node ${actionlib_LIBRARIES} ${franka_gripper_LIBRARIES})
-    target_include_directories(motion_moveit_node PRIVATE ${actionlib_INCLUDE_DIRS} ${franka_gripper_INCLUDE_DIRS})
-  else()
-    target_compile_definitions(motion_moveit_node PRIVATE MEMORY_GAME_HAS_FRANKA_GRIPPER=0)
-    message(STATUS "Franka gripper action not found: gripper close disabled in motion_moveit_node")
-  endif()
   add_dependencies(motion_moveit_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
   install(TARGETS motion_moveit_node
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

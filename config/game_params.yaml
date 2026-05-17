@@ -13,25 +13,15 @@ game_node:
   require_detected_blocks: true
   min_detected_blocks_required: 3
   blocks_wait_sec: 0.5
-  block_freshness_sec: 30.0
+  block_freshness_sec: 0.20
   motion_timeout_per_target_sec: 15.0
   motion_timeout_padding_sec: 2.0
   motion_retry_limit: 1
   motion_retry_delay_sec: 0.75
-
-  # Raw block-position gate before publishing /target_sequence.
-  # Broad enough for the table, but rejects impossible targets like x=2.3 m.
-  target_workspace_enable: true
-  target_workspace_min_x: -0.50
-  target_workspace_max_x: 1.00
-  target_workspace_min_y: -0.30
-  target_workspace_max_y: 1.00
-  target_workspace_min_z: -0.05
-  target_workspace_max_z: 0.30
   
   target_frame: "panda_link0"
   target_subscriber_poll_sec: 0.2
-  target_subscriber_timeout_sec: 60.0
+  target_subscriber_timeout_sec: 15.0
   
   default_x: 0.40
   default_y: 0.00
@@ -60,13 +50,12 @@ vision_node:
 
   base_exclusion_radius_m: 0.20
 
-  # Image-space crop rectangle (pixels). Everything outside is masked to black
-  # before color detection. Defaults are wide → no cropping until you tighten.
-  # Tune by reading mouse coordinates from rqt_image_view on /vision/debug_overlay.
-  image_crop_x_min: 280
-  image_crop_x_max: 1000
-  image_crop_y_min: 400
-  image_crop_y_max: 660
+  # Spherical zones in `target_frame` (panda_link0) where detections are rejected.
+  # Use this to mask persistent false positives (e.g., a yellow box in the corner).
+  # Each entry: { x, y, z, radius } in meters.
+  extra_exclusions:
+    - { x: 0.65, y: -0.20, z: 0.0, radius: 0.25 }   # behind blue "corner"
+    - { x: 0.65, y: 0.40,  z: 0.0, radius: 0.25 }   # behind green "edge"
 
   smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
@@ -119,11 +108,11 @@ motion_moveit_node:
   planning_group: "arm"
   pose_frame: "panda_link0"
   require_pose_frame_match: true
-  max_velocity_scaling: 0.12
-  max_acceleration_scaling: 0.07
-  point_velocity_scaling: 0.08
-  point_acceleration_scaling: 0.04
-  use_ik_joint_targets: false
+  max_velocity_scaling: 0.08
+  max_acceleration_scaling: 0.05
+  point_velocity_scaling: 0.05
+  point_acceleration_scaling: 0.03
+  use_ik_joint_targets: true
   fallback_pose_target_on_ik_failure: true
   ik_timeout: 0.15
   min_hover_z: 0.30
@@ -138,12 +127,6 @@ motion_moveit_node:
   indicate_hold_sec: 0.20
   max_plan_retries: 3
   strict_pointing: false
-  close_gripper_for_pointing: false
-  gripper_action_name: "/franka_gripper/move"
-  gripper_closed_width: 0.0
-  gripper_speed: 0.06
-  gripper_wait_timeout_sec: 0.25
-  gripper_result_timeout_sec: 2.5
   return_home: true
   use_current_state_as_home: true
   keep_current_orientation: false

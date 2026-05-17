@@ -88,13 +88,6 @@ private:
     double motion_timeout_padding_sec_;
     int motion_retry_limit_;
     double motion_retry_delay_sec_;
-    bool target_workspace_enable_;
-    double target_workspace_min_x_;
-    double target_workspace_max_x_;
-    double target_workspace_min_y_;
-    double target_workspace_max_y_;
-    double target_workspace_min_z_;
-    double target_workspace_max_z_;
 
     geometry_msgs::Point default_target_;
     std::string target_frame_;
@@ -172,13 +165,6 @@ private:
         pnh_.param("motion_timeout_padding_sec", motion_timeout_padding_sec_, 2.0);
         pnh_.param("motion_retry_limit", motion_retry_limit_, 1);
         pnh_.param("motion_retry_delay_sec", motion_retry_delay_sec_, 0.75);
-        pnh_.param("target_workspace_enable", target_workspace_enable_, false);
-        pnh_.param("target_workspace_min_x", target_workspace_min_x_, -10.0);
-        pnh_.param("target_workspace_max_x", target_workspace_max_x_, 10.0);
-        pnh_.param("target_workspace_min_y", target_workspace_min_y_, -10.0);
-        pnh_.param("target_workspace_max_y", target_workspace_max_y_, 10.0);
-        pnh_.param("target_workspace_min_z", target_workspace_min_z_, -10.0);
-        pnh_.param("target_workspace_max_z", target_workspace_max_z_, 10.0);
 
         pnh_.param("default_x", default_target_.x, 0.40);
         pnh_.param("default_y", default_target_.y, 0.00);
@@ -218,16 +204,6 @@ private:
             ROS_WARN("disable_red removed all available blocks; falling back to block 0");
             available_block_ids_.push_back(0);
         }
-    }
-
-    bool withinTargetWorkspace(const geometry_msgs::Point& point) const {
-        if (!target_workspace_enable_) {
-            return true;
-        }
-
-        return point.x >= target_workspace_min_x_ && point.x <= target_workspace_max_x_ &&
-               point.y >= target_workspace_min_y_ && point.y <= target_workspace_max_y_ &&
-               point.z >= target_workspace_min_z_ && point.z <= target_workspace_max_z_;
     }
 
     bool isBlockFresh(int id, const ros::Time& now) const {
@@ -289,9 +265,6 @@ private:
             if (!isBlockFresh(id, now)) {
                 continue;
             }
-            if (!withinTargetWorkspace(entry.second.position)) {
-                continue;
-            }
             ids.push_back(id);
         }
 
@@ -316,15 +289,6 @@ private:
     void blocksCallback(const memory_game::BlockArray::ConstPtr& msg) {
         const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
         for (const auto& block : msg->blocks) {
-            if (!withinTargetWorkspace(block.position)) {
-                ROS_WARN_THROTTLE(2.0,
-                                  "Ignoring detected block %d at (%.3f, %.3f, %.3f): outside target workspace",
-                                  block.id,
-                                  block.position.x,
-                                  block.position.y,
-                                  block.position.z);
-                continue;
-            }
             known_blocks_[block.id] = block;
             block_seen_times_[block.id] = stamp;
         }
@@ -550,15 +514,6 @@ private:
         return true;
     }
 
-    bool motionReadyForSequence() const {
-        if (motion_sub_.getNumPublishers() == 0 || !have_motion_state_) {
-            return false;
-        }
-
-        const MotionStatus status = parseMotionStatus(last_motion_state_);
-        return status.state == "IDLE";
-    }
-
     void playerTimeoutCallback(const ros::TimerEvent&) {
         if (current_state_ != GameState::WAITING_PLAYER) {
             return;
@@ -638,35 +593,6 @@ private:
         if (!active_sequence_msg_valid_ && require_detected_blocks_ && !haveSequenceTargets()) {
             refreshAvailableBlocksFromDetections();
             waitForBlocksAndRetry("Sequence target missing.");
-            return;
-        }
-
-        if (!motionReadyForSequence()) {
-            const ros::Time now = ros::Time::now();
-            if (target_sub_wait_start_.isZero()) {
-                target_sub_wait_start_ = now;
-            }
-
-            const double waited_sec = (now - target_sub_wait_start_).toSec();
-            if (waited_sec > target_subscriber_timeout_sec_) {
-                ROS_ERROR("Motion node did not report ready after %.1fs", waited_sec);
-                abortDueToMotionFailure();
-                return;
-            }
-
-            const std::string last_status = have_motion_state_ ? last_motion_state_ : "none";
-            ROS_WARN_THROTTLE(2.0,
-                              "Waiting for motion node to report IDLE (%u publishers, last status: %s, %.1fs/%.1fs)",
-                              motion_sub_.getNumPublishers(),
-                              last_status.c_str(),
-                              waited_sec,
-                              target_subscriber_timeout_sec_);
-            publishState("WAITING_FOR_MOTION");
-            target_sub_wait_timer_ = nh_.createTimer(
-                ros::Duration(target_subscriber_poll_sec_),
-                &GameNode::targetSubWaitCallback,
-                this,
-                true);
             return;
         }
 
@@ -808,15 +734,6 @@ private:
         const ros::Time now = ros::Time::now();
         auto it = known_blocks_.find(block_id);
         if (it != known_blocks_.end() && isBlockFresh(block_id, now)) {
-            if (!withinTargetWorkspace(it->second.position)) {
-                ROS_WARN_THROTTLE(2.0,
-                                  "Rejecting target block %d at (%.3f, %.3f, %.3f): outside target workspace",
-                                  block_id,
-                                  it->second.position.x,
-                                  it->second.position.y,
-                                  it->second.position.z);
-                return false;
-            }
             target = it->second;
             target.header.stamp = now;
             target.id = block_id;

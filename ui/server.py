@@ -99,9 +99,10 @@ PROCESS_LABELS = {
 }
 
 # Before launching a process, wait until this ROS node is visible in rosnode list.
-# Keep this empty for demo startup: the UI should open terminals quickly, like
-# manual startup. game_node already waits for motion subscribers and blocks.
-LAUNCH_DEPENDENCIES: Dict[str, str] = {}
+# The game publishes /target_sequence immediately, so motion must be subscribed first.
+LAUNCH_DEPENDENCIES: Dict[str, str] = {
+    "game": "/motion_moveit_node",
+}
 DEPENDENCY_TIMEOUT_SEC = 40.0
 
 
@@ -357,7 +358,7 @@ class ProcessManager:
                     self._procs[name] = proc
                 self.state.append_log(f"Started {PROCESS_LABELS.get(name, name)}.")
                 self.refresh_state()
-                time.sleep(0.10)
+                time.sleep(0.25)
 
             self.state.update(bridge_message="All processes started.")
             self.state.append_log("Session fully started.")
