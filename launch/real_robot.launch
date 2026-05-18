@@ -1,4 +1,0 @@
-<?xml version="1.0"?>
-<launch>
-  <include file="$(find cu_panda_bringup)/launch/hardware.launch" />  
-</launch>
